@@ -1,0 +1,2 @@
+pyinstaller>=6.0.0
+setuptools>=69.0.0
