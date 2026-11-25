@@ -145,8 +145,11 @@ impl Parser {
         } else {
             None
         };
-        self.expect(&Tok::Assign)?;
-        let init = self.parse_expr()?;
+        let init = if self.eat(&Tok::Assign) {
+            self.parse_expr()?
+        } else {
+            Expr::Int(0)
+        };
         self.expect(&Tok::Semi)?;
         if is_let {
             Ok(Stmt::Let(name, ty, init))
@@ -243,8 +246,11 @@ impl Parser {
                 } else {
                     None
                 };
-                self.expect(&Tok::Assign)?;
-                let init = self.parse_expr()?;
+                let init = if self.eat(&Tok::Assign) {
+                    self.parse_expr()?
+                } else {
+                    Expr::Int(0)
+                };
                 if is_let {
                     Ok(Stmt::Let(name, ty, init))
                 } else {

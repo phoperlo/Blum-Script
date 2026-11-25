@@ -1,3 +1,4 @@
+#![allow(dead_code)] // encoder / type-surface: not every opcode is used by the current backend
 //! Type system for BlumScript.
 
 #[derive(Clone, Debug, PartialEq)]

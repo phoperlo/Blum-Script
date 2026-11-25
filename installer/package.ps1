@@ -62,7 +62,7 @@ foreach ($f in @("install.ps1", "install.bat", "uninstall.ps1")) {
 Ok "installer scripts"
 
 if (-not $NoZip) {
-    $zip = Join-Path $project "blumscript-0.2.0-windows.zip"
+    $zip = Join-Path $project "blumscript-1.0.0-windows.zip"
     if (Test-Path $zip) { Remove-Item -Force $zip }
     Step "compressing $zip"
     Compress-Archive -Path (Join-Path $dist "*") -DestinationPath $zip

@@ -141,7 +141,7 @@ if (Test-Path $uninstallSrc) {
 # ---- version file ----
 @"
 BlumScript
-version: 0.2.0
+version: 1.0.0
 installed: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 compiler: $binDir\blumsc.exe
 site: $siteDir\index.html

@@ -1,55 +1,81 @@
 //! BlumScript compiler CLI (`blumsc`).
+//!
+//! The compiler emits x86-64 machine code directly and links a PE32+
+//! executable itself: no C backend, no assembler, no LLVM, no linker.
 
+mod abi;
 mod ast;
-mod codegen;
-mod driver;
+mod imports;
 mod lexer;
+mod native;
 mod parser;
+mod pe;
+mod runtime;
 mod types;
+mod x64;
 
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
 fn usage() {
     eprintln!(
-        r#"BlumScript compiler (blumsc) v0.2.0
+        r#"BlumScript compiler (blumsc) {}
 
 USAGE:
-  blumsc build <file.blm> [-o output.exe] [--emit-c]
-  blumsc run   <file.blm> [--emit-c]
+  blumsc build <file.blm> [-o output.exe]
+  blumsc run   <file.blm>
   blumsc check <file.blm>
   blumsc tokens <file.blm>
   blumsc ast    <file.blm>
+  blumsc hex    <file.blm>
 
 OPTIONS:
-  -o <path>     output executable path (build)
-  --emit-c      print generated C code to stdout
-  -h, --help    show this help
-  -V, --version show version
-"#
+  -o <path>        output executable path (build)
+  --emit-bytes     print the emitted machine code as hex
+  -h, --help       show this help
+  -V, --version    show version
+
+The backend writes x86-64 machine code and a PE32+ image directly.
+No external compiler, linker or runtime is required."#,
+        env!("CARGO_PKG_VERSION")
     );
 }
 
 fn parse_source(path: &Path) -> Result<Vec<ast::Stmt>, String> {
-    let src = driver::expand_imports(path)?;
+    let src = imports::expand_imports(path)?;
     let toks = lexer::lex(&src)?;
     let mut p = parser::Parser::new(toks);
     p.parse_program()
 }
 
-fn compile_to_c(path: &Path) -> Result<(String, Vec<ast::Stmt>), String> {
-    let program = parse_source(path)?;
-    let mut cg = codegen::Codegen::new();
-    let c = cg.generate(&program)?;
-    Ok((c, program))
+fn compile(input: &Path) -> Result<native::Output, String> {
+    let program = parse_source(input)?;
+    native::compile(&program)
 }
 
 fn default_exe(path: &Path) -> PathBuf {
     let mut p = path.to_path_buf();
     p.set_extension("exe");
     p
+}
+
+fn hexdump(bytes: &[u8]) {
+    for (i, chunk) in bytes.chunks(16).enumerate() {
+        let mut line = format!("{:08x}  ", i * 16);
+        for b in chunk {
+            line.push_str(&format!("{:02x} ", b));
+        }
+        for _ in chunk.len()..16 {
+            line.push_str("   ");
+        }
+        line.push(' ');
+        for b in chunk {
+            let c = *b;
+            line.push(if (0x20..0x7f).contains(&c) { c as char } else { '.' });
+        }
+        println!("{}", line);
+    }
 }
 
 fn main() {
@@ -66,7 +92,7 @@ fn main() {
             return;
         }
         "-V" | "--version" | "version" => {
-            println!("blumsc 0.2.0");
+            println!("blumsc {}", env!("CARGO_PKG_VERSION"));
             return;
         }
         _ => {}
@@ -85,7 +111,7 @@ fn main() {
     }
 
     let mut output: Option<PathBuf> = None;
-    let mut emit_c = false;
+    let mut emit_bytes = cmd == "hex";
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -97,8 +123,8 @@ fn main() {
                 output = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
-            "--emit-c" => {
-                emit_c = true;
+            "--emit-bytes" | "--emit-asm" => {
+                emit_bytes = true;
                 i += 1;
             }
             other => {
@@ -109,7 +135,7 @@ fn main() {
     }
 
     match cmd {
-        "tokens" => match driver::expand_imports(&input).and_then(|s| lexer::lex(&s)) {
+        "tokens" => match imports::expand_imports(&input).and_then(|s| lexer::lex(&s)) {
             Ok(toks) => {
                 for t in toks {
                     println!("{:?}", t);
@@ -127,15 +153,15 @@ fn main() {
                 process::exit(1);
             }
         },
-        "check" => match compile_to_c(&input) {
+        "check" => match compile(&input) {
             Ok(_) => println!("ok: {}", input.display()),
             Err(e) => {
                 eprintln!("error: {}", e);
                 process::exit(1);
             }
         },
-        "build" | "run" => {
-            let (c, _program) = match compile_to_c(&input) {
+        "build" | "run" | "hex" => {
+            let out = match compile(&input) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("error: {}", e);
@@ -143,27 +169,34 @@ fn main() {
                 }
             };
 
-            if emit_c {
-                print!("{}", c);
-            }
-
             let exe = output.unwrap_or_else(|| default_exe(&input));
-            let c_path = exe.with_extension("c");
 
-            if let Err(e) = fs::write(&c_path, &c) {
-                eprintln!("error: cannot write '{}': {}", c_path.display(), e);
-                process::exit(1);
-            }
-
-            if let Err(e) = driver::compile_c(&c_path, &exe) {
+            if let Err(e) = pe::write_exe(&exe, &out.asm, &out.rdata, &out.data, abi::IMPORTS, out.entry)
+            {
                 eprintln!("error: {}", e);
                 process::exit(1);
+            }
+
+            if emit_bytes {
+                if let Ok(img) = pe::link(&out.asm, &out.rdata, &out.data, abi::IMPORTS, out.entry) {
+                    let n = out.asm.code.len();
+                    let start = 0x200;
+                    let end = (start + n).min(img.len());
+                    eprintln!(
+                        "; .text  {} bytes  entry +0x{:x}  rdata {}  data {}",
+                        n,
+                        out.entry,
+                        out.rdata.len(),
+                        out.data.len()
+                    );
+                    hexdump(&img[start..end]);
+                }
             }
 
             println!("built: {}", exe.display());
 
             if cmd == "run" {
-                match driver::run_exe(&exe) {
+                match imports::run_exe(&exe) {
                     Ok(code) => process::exit(code),
                     Err(e) => {
                         eprintln!("error: {}", e);

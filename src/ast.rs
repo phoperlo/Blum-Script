@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! AST definitions for BlumScript.
 
 use crate::types::Type;

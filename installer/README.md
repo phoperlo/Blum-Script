@@ -54,7 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\package.ps1
 Создаст:
 
 - `..\dist\` — готовый набор (`blumsc.exe`, документация, примеры, сайт, установщик);
-- `..\blumscript-0.2.0-windows.zip` — архив для распространения.
+- `..\blumscript-1.0.0-windows.zip` — архив для распространения.
 
 В упакованном виде `install.ps1` использует `blumsc.exe`, лежащий рядом с ним,
 и не требует Rust/Cargo у конечного пользователя.

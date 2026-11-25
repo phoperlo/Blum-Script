@@ -1,8 +1,11 @@
-[package]
+﻿[package]
 name = "blumscript"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 
 [[bin]]
 name = "blumsc"
 path = "src/main.rs"
+
+[profile.release]
+opt-level = 2

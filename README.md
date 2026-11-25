@@ -1,6 +1,6 @@
 # BlumScript
 
-Компилируемый язык с английскими ключевыми словами и возможностями C: от высокоуровневых функций и структур до указателей, `malloc/free`, `sizeof`, `cast<T>` и сырых C-вставок. Написан на Rust, генерирует C99 и собирает нативный `.exe` через MSVC / GCC / Clang.
+Компилируемый язык с английскими ключевыми словами и возможностями C: от высокоуровневых функций и структур до указателей, `malloc/free`, `sizeof`, `cast<T>` и сырых вставок машинного кода. Написан на Rust и **сам генерирует x86-64 машинный код и PE32+ `.exe`** — без C, без ассемблера, без LLVM, без внешнего линковщика.
 
 ## Сборка компилятора
 
@@ -10,7 +10,7 @@ cargo build --release
 
 Бинарник: `target\release\blumsc.exe`.
 
-Нужен Rust и C-компилятор (MSVC с `vcvars64.bat`, либо `gcc`/`clang` в `PATH`).
+Нужен только Rust. C-компилятор больше не требуется: бэкенд пишет байты инструкций и собирает PE-образ сам.
 
 ## Быстрый старт
 
@@ -27,28 +27,37 @@ func main() -> int {
 blumsc run hello.blm
 ```
 
+```
+built: hello.exe
+Hello, BlumScript!
+```
+
 ## CLI
 
 ```
-blumsc build <file.blm> [-o out.exe] [--emit-c]
+blumsc build <file.blm> [-o out.exe] [--emit-bytes]
 blumsc run   <file.blm>
 blumsc check <file.blm>
 blumsc tokens <file.blm>
 blumsc ast    <file.blm>
+blumsc hex    <file.blm>
 ```
+
+`--emit-bytes` / `hex` печатают сгенерированный машинный код hex-дампом.
 
 ## Возможности
 
 - `let` / `var`, вывод типов, явные аннотации `name: type`
 - `func` с типизированными параметрами и `-> тип`
-- `if` / `else`, `while`, трёхчастный `for`, `break`, `continue`, `return`
-- `struct` с доступом `.` и `->`
+- `if` / `else` / `else if`, `while`, трёхчастный `for`, `break`, `continue`, `return`
+- `struct` с доступом `.` и `->`, вложенные структуры, выравнивание полей
 - указатели `*T`, `&`, `*`, арифметика указателей, индексация `[]`
-- `malloc` / `free`, `sizeof`, `cast<T>(...)`
-- встроенные `print`, `len`, `strlen`, `to_int`, `to_float`
+- `malloc` / `free` (через `HeapAlloc` / `HeapFree`), `sizeof`, `cast<T>(...)`
+- встроенные `print`, `len`, `strlen`, `to_int`
 - `import "file.blm"` с рекурсивным раскрытием
-- `asm { ... }` — дословная вставка C
-- компиляция в нативный код (без VM)
+- `asm { ... }` — raw-байты машинного кода прямо в `.text`
+- собственный рантайм на машинном коде: печать чисел/строк/символов/bool, `strlen`, heap
+- соглашение вызова Microsoft x64, импорт только из `kernel32.dll`
 
 ## Примеры
 
@@ -56,7 +65,8 @@ blumsc ast    <file.blm>
 
 - `hello.blm` — приветствие, фибоначчи, циклы;
 - `lowlevel.blm` — структуры, указатели, `malloc`, разыменование;
-- `imports.blm` — импорт модуля, рекурсия, вставка C;
+- `imports.blm` — импорт модуля, рекурсия, raw-вставка машинного кода;
+- `elseif.blm` — цепочка `else if`;
 - `utils.blm` — модуль с функциями.
 
 ```powershell
@@ -105,8 +115,12 @@ blumscript_rust/
 │   ├── ast.rs       # AST
 │   ├── parser.rs    # рекурсивный спуск
 │   ├── types.rs     # система типов
-│   ├── codegen.rs   # проверка типов + генерация C
-│   └── driver.rs    # импорты + вызов C-компилятора
+│   ├── x64.rs       # кодировщик инструкций x86-64, метки, фиксапы
+│   ├── native.rs    # семантика + кодоген (AST → машинный код)
+│   ├── runtime.rs   # рантайм на машинном коде
+│   ├── abi.rs       # смещения, индексы IAT, импорты kernel32
+│   ├── pe.rs        # PE32+ writer (секции, импорт-таблица, фиксапы)
+│   └── imports.rs   # раскрытие import + запуск .exe
 ├── examples/        # примеры .blm
 ├── site/            # обучающий HTML-сайт с песочницей
 └── installer/       # установщик, деинсталлятор, упаковка

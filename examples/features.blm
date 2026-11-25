@@ -1,0 +1,66 @@
+// features.blm — обзор возможностей нативного бэкенда.
+struct Vec2 {
+    x: int;
+    y: int;
+}
+
+struct Body {
+    pos: Vec2;
+    vel: Vec2;
+    id: int;
+    alive: bool;
+}
+
+func step(b: *Body) -> void {
+    b->pos.x = b->pos.x + b->vel.x;
+    b->pos.y = b->pos.y + b->vel.y;
+}
+
+func main() -> int {
+    var b: Body;
+    b.pos.x = 10;
+    b.pos.y = 20;
+    b.vel.x = 1;
+    b.vel.y = -2;
+    b.id = 7;
+    b.alive = true;
+
+    var i: int = 0;
+    while (i < 5) {
+        step(&b);
+        i = i + 1;
+    }
+
+    print("pos = (", b.pos.x, ",", b.pos.y, ")");
+    print("id = ", b.id, " alive = ", b.alive);
+    print("sizeof(Vec2) = ", sizeof(Vec2), " sizeof(Body) = ", sizeof(Body));
+    print("sizeof(int) = ", sizeof(int), " sizeof(char) = ", sizeof(char));
+
+    var v: Vec2;
+    v.x = 3;
+    v.y = 4;
+    var pv: *Vec2 = &v;
+    print("dist2 = ", pv->x * pv->x + pv->y * pv->y);
+
+    var sq: int[5];
+    for (var k: int = 0; k < 5; k = k + 1) {
+        sq[k] = k * k;
+    }
+    var total: int = 0;
+    for (var k: int = 0; k < 5; k = k + 1) {
+        total = total + sq[k];
+    }
+    print("sum of squares = ", total);
+
+    var big: int = 9000000000;
+    print("big = ", big, " neg = ", -big);
+    print("div/mod: ", 17 / 5, " ", 17 % 5, " ", -17 / 5, " ", -17 % 5);
+
+    var raw: *byte = cast<*byte>(malloc(16));
+    print("malloc ok = ", raw != null);
+    free(raw);
+
+    var msg: string = "escaped\t\"tab\" len = ";
+    print(msg, len(msg));
+    return 0;
+}
