@@ -1,0 +1,34 @@
+struct Point {
+    x: int;
+    y: int;
+}
+
+func dist2(a: *Point, b: *Point) -> int {
+    let dx: int = a->x - b->x;
+    let dy: int = a->y - b->y;
+    return dx * dx + dy * dy;
+}
+
+func main() -> int {
+    var p: *Point = cast<*Point>(malloc(sizeof(Point)));
+    var q: *Point = cast<*Point>(malloc(sizeof(Point)));
+
+    p->x = 1;
+    p->y = 2;
+    q->x = 4;
+    q->y = 6;
+
+    print("p = (", p->x, ",", p->y, ")");
+    print("q = (", q->x, ",", q->y, ")");
+    print("dist2 =", dist2(p, q));
+
+    // raw pointer arithmetic + dereference
+    var n: int = 5;
+    var ptr: *int = &n;
+    *ptr = 42;
+    print("n after *ptr = 42 ->", n);
+
+    free(p);
+    free(q);
+    return 0;
+}

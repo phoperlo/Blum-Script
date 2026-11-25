@@ -1,0 +1,14 @@
+func classify(x: int) -> string {
+    if (x > 0) {
+        return "positive";
+    } else if (x < 0) {
+        return "negative";
+    } else {
+        return "zero";
+    }
+}
+
+func main() -> int {
+    print(classify(-5), " ", classify(0), " ", classify(7), "\n");
+    return 0;
+}

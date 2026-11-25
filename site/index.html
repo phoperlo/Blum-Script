@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BlumScript — обучение</title>
+<style>
+  :root{
+    --bg:#0b0f14;
+    --panel:#111821;
+    --panel2:#0e141c;
+    --line:#1f2b38;
+    --text:#d7e2ee;
+    --muted:#8aa0b6;
+    --accent:#4fd1c5;
+    --accent2:#63b3ed;
+    --code-bg:#091018;
+    --ok:#68d391;
+    --warn:#f6ad55;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+    line-height:1.65;
+  }
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header{
+    position:sticky;top:0;z-index:20;
+    background:rgba(11,15,20,.86);
+    backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line);
+    padding:14px 22px;
+    display:flex;align-items:center;gap:14px;
+  }
+  .logo{
+    font-weight:800;font-size:20px;letter-spacing:.5px;
+    color:var(--text);
+  }
+  .logo span{color:var(--accent)}
+  .badge{
+    font-size:12px;color:var(--muted);
+    border:1px solid var(--line);border-radius:999px;
+    padding:2px 10px;
+  }
+  .layout{display:flex;max-width:1400px;margin:0 auto}
+  nav{
+    width:260px;flex:0 0 260px;
+    position:sticky;top:60px;align-self:flex-start;
+    height:calc(100vh - 60px);
+    overflow:auto;
+    padding:20px 12px 40px 20px;
+    border-right:1px solid var(--line);
+    font-size:14px;
+  }
+  nav h3{
+    font-size:11px;text-transform:uppercase;letter-spacing:1.2px;
+    color:var(--muted);margin:18px 0 8px;
+  }
+  nav a{
+    display:block;color:var(--muted);
+    padding:6px 10px;border-radius:8px;
+    border-left:2px solid transparent;
+  }
+  nav a:hover{background:var(--panel);color:var(--text);text-decoration:none}
+  nav a.active{color:var(--accent);background:var(--panel);border-left-color:var(--accent)}
+  main{
+    flex:1;min-width:0;padding:36px 48px 120px;
+  }
+  section{scroll-margin-top:80px;margin-bottom:64px}
+  h1{font-size:34px;line-height:1.2;margin:0 0 8px}
+  h2{font-size:26px;margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:18px;margin:28px 0 10px;color:var(--accent)}
+  p{margin:10px 0}
+  .lead{color:var(--muted);font-size:17px}
+  ul{margin:8px 0;padding-left:22px}
+  li{margin:4px 0}
+  code{
+    font-family:"Cascadia Code","Consolas",monospace;
+    background:var(--panel);border:1px solid var(--line);
+    border-radius:5px;padding:1px 6px;font-size:.92em;
+  }
+  pre{
+    background:var(--code-bg);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:16px 18px;
+    overflow:auto;
+    margin:12px 0;
+    position:relative;
+  }
+  pre code{
+    background:none;border:none;padding:0;font-size:13.5px;
+    line-height:1.55;color:#cbd5e1;
+  }
+  .code-wrap{position:relative}
+  .copy{
+    position:absolute;top:8px;right:8px;
+    background:var(--panel2);color:var(--muted);
+    border:1px solid var(--line);border-radius:7px;
+    padding:4px 10px;font-size:12px;cursor:pointer;
+    opacity:0;transition:.15s;
+  }
+  .code-wrap:hover .copy{opacity:1}
+  .copy:hover{color:var(--accent);border-color:var(--accent)}
+  .note{
+    border-left:3px solid var(--accent2);
+    background:rgba(99,179,237,.07);
+    padding:12px 16px;border-radius:0 8px 8px 0;
+    margin:14px 0;color:var(--text);
+  }
+  .warn{
+    border-left:3px solid var(--warn);
+    background:rgba(246,173,85,.07);
+    padding:12px 16px;border-radius:0 8px 8px 0;
+    margin:14px 0;
+  }
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left}
+  th{background:var(--panel);color:var(--accent)}
+  tr:nth-child(even) td{background:var(--panel2)}
+  .tag{
+    display:inline-block;font-size:11px;color:var(--accent);
+    border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:8px;
+    vertical-align:middle;
+  }
+  .playground{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:16px;
+  }
+  .playground textarea{
+    width:100%;min-height:230px;resize:vertical;
+    background:var(--code-bg);color:#cbd5e1;
+    border:1px solid var(--line);border-radius:10px;
+    padding:14px;font-family:"Cascadia Code","Consolas",monospace;
+    font-size:13.5px;line-height:1.55;
+  }
+  .playground textarea:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
+  button.run{
+    background:var(--accent);color:#062420;border:none;
+    border-radius:8px;padding:9px 20px;font-weight:700;cursor:pointer;
+  }
+  button.run:hover{filter:brightness(1.1)}
+  button.ghost{
+    background:transparent;color:var(--muted);border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer;
+  }
+  button.ghost:hover{color:var(--text);border-color:var(--accent)}
+  #output{
+    margin-top:12px;background:var(--code-bg);border:1px solid var(--line);
+    border-radius:10px;padding:14px;min-height:80px;
+    font-family:"Cascadia Code","Consolas",monospace;font-size:13.5px;
+    white-space:pre-wrap;color:var(--ok);
+  }
+  #output .err{color:#fc8181}
+  .kbd{
+    font-family:monospace;border:1px solid var(--line);border-bottom-width:2px;
+    background:var(--panel);border-radius:4px;padding:1px 6px;font-size:12px;
+  }
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:900px){
+    nav{display:none}
+    main{padding:24px 18px 80px}
+    .grid2{grid-template-columns:1fr}
+  }
+  .muted{color:var(--muted)}
+  .hl{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Blum<span>Script</span></div>
+  <div class="badge">компилируемый · Rust · C99</div>
+  <div style="margin-left:auto"><a href="#playground" class="badge" style="text-decoration:none">Песочница →</a></div>
+</header>
+
+<div class="layout">
+<nav id="nav">
+  <h3>Начало</h3>
+  <a href="#intro">Введение</a>
+  <a href="#install">Установка</a>
+  <a href="#hello">Первая программа</a>
+  <h3>Язык</h3>
+  <a href="#vars">Переменные и типы</a>
+  <a href="#ops">Операторы</a>
+  <a href="#control">Условия и циклы</a>
+  <a href="#funcs">Функции</a>
+  <a href="#structs">Структуры</a>
+  <a href="#pointers">Указатели и память</a>
+  <a href="#modules">Импорты и asm</a>
+  <h3>Практика</h3>
+  <a href="#playground">Песочница</a>
+  <a href="#reference">Шпаргалка</a>
+</nav>
+
+<main>
+
+<section id="intro">
+  <h1>BlumScript</h1>
+  <p class="lead">Универсальный компилируемый язык: английские ключевые слова для низкого порога входа и полный доступ к памяти для системного программирования.</p>
+  <p>BlumScript компилируется в C99 и затем в нативный исполняемый файл. Никакой виртуальной машины: скорость и ABI как у C. Один и тот же язык подходит и для прикладного кода, и для низкоуровневых задач.</p>
+  <div class="grid2">
+    <div>
+      <h3>Высокоуровневый стиль</h3>
+      <ul>
+        <li><code>let</code>, <code>var</code>, вывод типов</li>
+        <li><code>func</code>, <code>if</code>, <code>while</code>, <code>for</code></li>
+        <li>структуры и строки</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Низкоуровневый стиль</h3>
+      <ul>
+        <li>указатели <code>*T</code>, <code>&amp;</code>, <code>*</code></li>
+        <li><code>malloc</code>/<code>free</code>, <code>sizeof</code></li>
+        <li><code>cast&lt;T&gt;</code>, <code>asm { ... }</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="note">Все примеры на сайте можно запускать прямо в разделе <a href="#playground">Песочница</a> (поддерживается подмножество: переменные, выражения, условия, циклы, функции, печать).</div>
+</section>
+
+<section id="install">
+  <h2>Установка</h2>
+  <p>Компилятор написан на Rust и использует C-бэкенд. Нужны:</p>
+  <ul>
+    <li>Rust и <code>cargo</code>;</li>
+    <li>C-компилятор: MSVC (<code>cl.exe</code> + <code>vcvars64.bat</code>), либо <code>gcc</code>/<code>clang</code>.</li>
+  </ul>
+  <h3>Сборка из исходников</h3>
+  <div class="code-wrap"><pre><code>cd blumscript_rust
+cargo build --release</code></pre></div>
+  <p>Бинарник появится в <code>target\release\blumsc.exe</code>.</p>
+  <h3>Установщик Windows</h3>
+  <p>Запустите <code>installer\install.bat</code> (или <code>install.ps1</code>). Скрипт:</p>
+  <ul>
+    <li>соберёт компилятор, если бинарника ещё нет;</li>
+    <li>скопирует <code>blumsc.exe</code>, документацию, примеры и этот сайт в <code>%LOCALAPPDATA%\BlumScript</code>;</li>
+    <li>добавит <code>bin</code> в пользовательский <code>PATH</code>;</li>
+    <li>создаст <code>uninstall.ps1</code> для удаления.</li>
+  </ul>
+  <div class="code-wrap"><pre><code>installer\install.bat
+:: после установки откройте новый терминал
+blumsc run hello.blm</code></pre></div>
+</section>
+
+<section id="hello">
+  <h2>Первая программа</h2>
+  <p>Создайте файл <code>hello.blm</code>:</p>
+  <div class="code-wrap"><pre><code>func main() -&gt; int {
+    print("Hello, BlumScript!");
+    return 0;
+}</code></pre></div>
+  <p>Соберите и запустите:</p>
+  <div class="code-wrap"><pre><code>blumsc run hello.blm</code></pre></div>
+  <p>Вывод:</p>
+  <div class="code-wrap"><pre><code>built: hello.exe
+Hello, BlumScript!</code></pre></div>
+  <div class="note"><code>print</code> печатает аргументы <b>без разделителей</b> и добавляет перевод строки. Чтобы получить пробел, добавьте его в строку: <code>print("x = ", x)</code>.</div>
+</section>
+
+<section id="vars">
+  <h2>Переменные и типы</h2>
+  <p>Объявление с инициализатором. Тип можно указать явно или вывести:</p>
+  <div class="code-wrap"><pre><code>let x: int = 10;     // неизменяемая по замыслу
+var y: int = 20;     // изменяемая
+let z = 5;           // тип выведен: int</code></pre></div>
+  <h3>Примитивные типы</h3>
+  <table>
+    <tr><th>BlumScript</th><th>C-тип</th><th>Описание</th></tr>
+    <tr><td><code>bool</code></td><td><code>bool</code></td><td>логический</td></tr>
+    <tr><td><code>char</code></td><td><code>char</code></td><td>символ</td></tr>
+    <tr><td><code>byte</code></td><td><code>uint8_t</code></td><td>байт</td></tr>
+    <tr><td><code>int</code></td><td><code>int64_t</code></td><td>знаковое 64-бит</td></tr>
+    <tr><td><code>uint</code></td><td><code>uint64_t</code></td><td>беззнаковое 64-бит</td></tr>
+    <tr><td><code>float</code></td><td><code>double</code></td><td>дробное</td></tr>
+    <tr><td><code>string</code></td><td><code>char*</code></td><td>строка C</td></tr>
+    <tr><td><code>void</code></td><td><code>void</code></td><td>нет значения</td></tr>
+  </table>
+  <h3>Производные типы</h3>
+  <div class="code-wrap"><pre><code>*int          // указатель на int
+**int         // указатель на указатель
+*Point        // указатель на структуру</code></pre></div>
+  <p>Область видимости — блок <code>{ }</code>. Верхнеуровневые <code>let</code>/<code>var</code> становятся глобальными переменными и инициализируются в начале <code>main</code>.</p>
+</section>
+
+<section id="ops">
+  <h2>Операторы</h2>
+  <div class="grid2">
+    <div>
+      <h3>Арифметика</h3>
+      <div class="code-wrap"><pre><code>let a = 10 + 3 * 2;   // 16
+let b = 3.5 / 2.0;    // 1.75
+let c = a % 5;        // 1</code></pre></div>
+    </div>
+    <div>
+      <h3>Сравнения и логика</h3>
+      <div class="code-wrap"><pre><code>let ok = a &gt;= 15 and a != 7;
+let no = not ok;
+let any = ok or no;</code></pre></div>
+    </div>
+  </div>
+  <h3>Битовые операции</h3>
+  <div class="code-wrap"><pre><code>let mask = 1 &lt;&lt; 4;    // 16
+let inv  = ~mask;
+let x    = 0xF0 | 0x0F;</code></pre></div>
+  <h3>Приоритет (от низкого к высокому)</h3>
+  <ol>
+    <li><code>=</code></li>
+    <li><code>or</code>, <code>||</code></li>
+    <li><code>and</code>, <code>&amp;&amp;</code></li>
+    <li><code>|</code></li>
+    <li><code>^</code></li>
+    <li><code>&amp;</code></li>
+    <li><code>==</code>, <code>!=</code></li>
+    <li><code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code></li>
+    <li><code>&lt;&lt;</code>, <code>&gt;&gt;</code></li>
+    <li><code>+</code>, <code>-</code></li>
+    <li><code>*</code>, <code>/</code>, <code>%</code></li>
+    <li>унарные <code>-</code>, <code>not</code>, <code>~</code>, <code>*</code>, <code>&amp;</code></li>
+  </ol>
+</section>
+
+<section id="control">
+  <h2>Условия и циклы</h2>
+  <h3>if / else</h3>
+  <div class="code-wrap"><pre><code>if (x &gt; 0) {
+    print("positive");
+} else if (x &lt; 0) {
+    print("negative");
+} else {
+    print("zero");
+}</code></pre></div>
+  <h3>while</h3>
+  <div class="code-wrap"><pre><code>var i: int = 0;
+while (i &lt; 10) {
+    print(i);
+    i = i + 1;
+}</code></pre></div>
+  <h3>for</h3>
+  <div class="code-wrap"><pre><code>for (var i: int = 0; i &lt; 10; i = i + 1) {
+    print(i);
+}</code></pre></div>
+  <h3>break / continue</h3>
+  <div class="code-wrap"><pre><code>for (var i: int = 0; i &lt; 100; i = i + 1) {
+    if (i == 5) { break; }
+    if (i % 2 == 0) { continue; }
+    print(i);
+}</code></pre></div>
+</section>
+
+<section id="funcs">
+  <h2>Функции</h2>
+  <div class="code-wrap"><pre><code>func add(a: int, b: int) -&gt; int {
+    return a + b;
+}
+
+func greet(name: string) {
+    print("Hello, ", name);
+}</code></pre></div>
+  <p>Параметры типизированы. Возвращаемый тип указывается через <code>-&gt;</code>; если его нет — <code>void</code>. Поддерживается рекурсия.</p>
+  <div class="code-wrap"><pre><code>func fact(n: int) -&gt; int {
+    if (n &lt;= 1) {
+        return 1;
+    }
+    return n * fact(n - 1);
+}</code></pre></div>
+  <div class="note">Точка входа — <code>func main() -&gt; int</code>. Компилятор переименовывает её и генерирует C-<code>int main(void)</code>, который выполняет операторы верхнего уровня, затем вызывает вашу функцию.</div>
+</section>
+
+<section id="structs">
+  <h2>Структуры</h2>
+  <div class="code-wrap"><pre><code>struct Point {
+    x: int;
+    y: int;
+}
+
+func main() -&gt; int {
+    var p: *Point = cast&lt;*Point&gt;(malloc(sizeof(Point)));
+    p-&gt;x = 10;
+    p-&gt;y = 20;
+    print("x=", p-&gt;x, " y=", p-&gt;y);
+    free(p);
+    return 0;
+}</code></pre></div>
+  <p>Доступ по значению — <code>obj.field</code>, через указатель — <code>ptr-&gt;field</code>. Компилятор сам выбирает <code>.</code> или <code>-&gt;</code> по типу базы.</p>
+  <div class="code-wrap"><pre><code>var a: Point;
+// ...
+print(a.x, a.y);</code></pre></div>
+</section>
+
+<section id="pointers">
+  <h2>Указатели и память</h2>
+  <h3>Адрес и разыменование</h3>
+  <div class="code-wrap"><pre><code>var n: int = 5;
+var p: *int = &amp;n;    // адрес n
+*p = 42;             // запись по адресу
+print(n);            // 42</code></pre></div>
+  <h3>malloc / free</h3>
+  <div class="code-wrap"><pre><code>var buf: *int = cast&lt;*int&gt;(malloc(sizeof(int) * 16));
+buf[0] = 1;
+buf[15] = 16;
+free(buf);</code></pre></div>
+  <h3>Арифметика указателей</h3>
+  <div class="code-wrap"><pre><code>*(arr + 1) = 2;   // эквивалентно arr[1] = 2</code></pre></div>
+  <div class="warn">Границы не проверяются. Это C-семантика: ответственность за корректность лежит на программисте.</div>
+  <h3>sizeof и cast</h3>
+  <div class="code-wrap"><pre><code>let bytes: int = sizeof(Point);
+var p: *Point = cast&lt;*Point&gt;(malloc(bytes));</code></pre></div>
+</section>
+
+<section id="modules">
+  <h2>Импорты и asm</h2>
+  <h3>Модули</h3>
+  <div class="code-wrap"><pre><code>import "utils.blm";</code></pre></div>
+  <p>Импорт раскрывается рекурсивно относительно текущего файла; расширение <code>.blm</code> добавляется автоматически. Повторные включения игнорируются.</p>
+  <h3>Сырой C</h3>
+  <div class="code-wrap"><pre><code>asm {
+    printf("raw C from asm block\n");
+}</code></pre></div>
+  <p>Содержимое <code>asm { ... }</code> вставляется в сгенерированный C дословно. Это аварийный выход для любых C-конструкций и интринсиков.</p>
+</section>
+
+<section id="playground">
+  <h2>Песочница <span class="tag">подмножество</span></h2>
+  <p>Здесь работает встроенный интерпретатор подмножества BlumScript: переменные, выражения, условия, циклы, функции и печать. Указатели, структуры и <code>malloc</code> выполняются только настоящим компилятором.</p>
+  <div class="playground">
+    <textarea id="code" spellcheck="false">func fib(n: int) -> int {
+    var a: int = 0;
+    var b: int = 1;
+    var i: int = 0;
+    while (i < n) {
+        let tmp: int = a + b;
+        a = b;
+        b = tmp;
+        i = i + 1;
+    }
+    return a;
+}
+
+print("fib(10) =", fib(10));
+
+var total: int = 0;
+for (var j: int = 1; j <= 5; j = j + 1) {
+    total = total + j;
+}
+print("sum 1..5 =", total);</textarea>
+    <div class="row">
+      <button class="run" id="runBtn">▶ Запустить</button>
+      <button class="ghost" id="clearBtn">Очистить вывод</button>
+      <span class="muted">или <span class="kbd">Ctrl</span> + <span class="kbd">Enter</span></span>
+    </div>
+    <div id="output">вывод появится здесь…</div>
+  </div>
+</section>
+
+<section id="reference">
+  <h2>Шпаргалка</h2>
+  <h3>Объявления</h3>
+  <div class="code-wrap"><pre><code>let name: type = expr;
+var name: type = expr;
+let name = expr;              // вывод типа</code></pre></div>
+  <h3>Функции</h3>
+  <div class="code-wrap"><pre><code>func name(a: int, b: string) -&gt; int {
+    return a;
+}</code></pre></div>
+  <h3>Управление</h3>
+  <div class="code-wrap"><pre><code>if (cond) { } else { }
+while (cond) { }
+for (init; cond; update) { }
+break; continue; return expr;</code></pre></div>
+  <h3>Структуры и указатели</h3>
+  <div class="code-wrap"><pre><code>struct Name { field: type; }
+var p: *Name = cast&lt;*Name&gt;(malloc(sizeof(Name)));
+p-&gt;field = value;
+var q: *int = &amp;some_int;
+*q = 42;
+free(p);</code></pre></div>
+  <h3>Встроенные</h3>
+  <table>
+    <tr><th>Функция</th><th>Назначение</th></tr>
+    <tr><td><code>print(...)</code></td><td>печать без разделителей + перевод строки</td></tr>
+    <tr><td><code>len(s)</code>, <code>strlen(s)</code></td><td>длина строки</td></tr>
+    <tr><td><code>malloc(n)</code></td><td>выделить память</td></tr>
+    <tr><td><code>free(p)</code></td><td>освободить память</td></tr>
+    <tr><td><code>to_int(x)</code>, <code>to_float(x)</code></td><td>приведение</td></tr>
+    <tr><td><code>sizeof(T)</code></td><td>размер типа</td></tr>
+    <tr><td><code>cast&lt;T&gt;(x)</code></td><td>приведение типа</td></tr>
+  </table>
+  <h3>CLI</h3>
+  <div class="code-wrap"><pre><code>blumsc build file.blm [-o out.exe] [--emit-c]
+blumsc run   file.blm
+blumsc check file.blm
+blumsc tokens file.blm
+blumsc ast    file.blm</code></pre></div>
+</section>
+
+</main>
+</div>
+
+<script>
+/* ============================================================
+   Мини-интерпретатор BlumScript для песочницы.
+   Поддерживает: let/var (с типами), выражения, if/else,
+   while, for, func/return, break/continue, print и базовые builtins.
+   ============================================================ */
+
+function lex(src){
+  const toks=[]; let i=0; const n=src.length;
+  const isId=c=>/[A-Za-z_]/.test(c);
+  const isId2=c=>/[A-Za-z0-9_]/.test(c);
+  while(i<n){
+    const c=src[i];
+    if(/\s/.test(c)){i++;continue;}
+    if(c==='/'&&src[i+1]==='/'){while(i<n&&src[i]!=='\n')i++;continue;}
+    if(c==='/'&&src[i+1]==='*'){i+=2;while(i<n&&!(src[i]==='*'&&src[i+1]==='/'))i++;i+=2;continue;}
+    if(c==='"'){
+      i++;let s='';
+      while(i<n&&src[i]!=='"'){
+        if(src[i]==='\\'&&i+1<n){i++;const e=src[i];s+=e==='n'?'\n':e==='t'?'\t':e==='r'?'\r':e==='\\'?'\\':e==='"'?'"':e;i++;}
+        else{s+=src[i];i++;}
+      }
+      if(i>=n)throw new Error('unterminated string');
+      i++;toks.push({t:'str',v:s});continue;
+    }
+    if(/[0-9]/.test(c)){
+      let j=i;
+      while(i<n&&/[0-9]/.test(src[i]))i++;
+      if(src[i]==='.'&&/[0-9]/.test(src[i+1]||'')){i++;while(i<n&&/[0-9]/.test(src[i]))i++;}
+      toks.push({t:'num',v:parseFloat(src.slice(j,i))});continue;
+    }
+    if(isId(c)){let j=i;while(i<n&&isId2(src[i]))i++;toks.push({t:'id',v:src.slice(j,i)});continue;}
+    const two=src.substr(i,2);
+    if(['==','!=','<=','>=','&&','||','<<','>>','->'].includes(two)){toks.push({t:'op',v:two});i+=2;continue;}
+    if('+-*/%<>=(){}[],;:!&|^~'.includes(c)){toks.push({t:'op',v:c});i++;continue;}
+    throw new Error('unexpected char: '+c);
+  }
+  toks.push({t:'eof',v:''});
+  return toks;
+}
+
+function Parser(toks){this.toks=toks;this.pos=0;}
+Parser.prototype.peek=function(o){o=o||0;return this.toks[Math.min(this.pos+o,this.toks.length-1)];};
+Parser.prototype.next=function(){return this.toks[this.pos++];};
+Parser.prototype.eat=function(v){if(this.peek().v===v){this.pos++;return true;}return false;};
+Parser.prototype.expect=function(v){if(!this.eat(v))throw new Error("expected '"+v+"', got '"+this.peek().v+"'");};
+Parser.prototype.expectId=function(){const t=this.next();if(t.t!=='id')throw new Error("expected identifier, got '"+t.v+"'");return t.v;};
+Parser.prototype.skipType=function(){
+  if(this.eat('*')){this.skipType();return;}
+  if(this.peek().t!=='id')throw new Error('expected type name');
+  this.next();
+  if(this.eat('[')){this.next();this.expect(']');}
+};
+Parser.prototype.parseProgram=function(){
+  const stmts=[];
+  while(this.peek().t!=='eof')stmts.push(this.parseStmt());
+  return stmts;
+};
+Parser.prototype.parseBlock=function(){
+  this.expect('{');
+  const stmts=[];
+  while(this.peek().v!=='}'&&this.peek().t!=='eof')stmts.push(this.parseStmt());
+  this.expect('}');
+  return stmts;
+};
+Parser.prototype.parseDecl=function(requireSemi){
+  this.next(); // let/var
+  const name=this.expectId();
+  if(this.eat(':'))this.skipType();
+  this.expect('=');
+  const init=this.parseExpr();
+  if(requireSemi)this.expect(';');
+  return {k:'decl',name:name,init:init};
+};
+Parser.prototype.parseStmt=function(){
+  const t=this.peek();
+  if(t.t==='id'){
+    if(t.v==='let'||t.v==='var')return this.parseDecl(true);
+    if(t.v==='func'){
+      this.next();const name=this.expectId();this.expect('(');
+      const params=[];
+      if(this.peek().v!==')'){
+        do{
+          const p=this.expectId();
+          if(this.eat(':'))this.skipType();
+          params.push(p);
+        }while(this.eat(','));
+      }
+      this.expect(')');
+      if(this.eat('->'))this.skipType();
+      const body=this.parseBlock();
+      return {k:'func',name:name,params:params,body:body};
+    }
+    if(t.v==='if'){
+      this.next();this.expect('(');const cond=this.parseExpr();this.expect(')');
+      const thenB=this.parseBlock();
+      let elseB=[];
+      if(this.eat('else')){
+        if(this.peek().v==='if')elseB=[this.parseStmt()];
+        else elseB=this.parseBlock();
+      }
+      return {k:'if',cond:cond,thenB:thenB,elseB:elseB};
+    }
+    if(t.v==='while'){
+      this.next();this.expect('(');const cond=this.parseExpr();this.expect(')');
+      return {k:'while',cond:cond,body:this.parseBlock()};
+    }
+    if(t.v==='for'){
+      this.next();this.expect('(');
+      let init=null,cond=null,upd=null;
+      if(this.peek().v!==';')init=this.parseSimple();
+      this.expect(';');
+      if(this.peek().v!==';')cond=this.parseExpr();
+      this.expect(';');
+      if(this.peek().v!==')')upd=this.parseSimple();
+      this.expect(')');
+      return {k:'for',init:init,cond:cond,upd:upd,body:this.parseBlock()};
+    }
+    if(t.v==='return'){
+      this.next();
+      if(this.eat(';'))return {k:'return',value:null};
+      const e=this.parseExpr();this.expect(';');return {k:'return',value:e};
+    }
+    if(t.v==='break'){this.next();this.expect(';');return {k:'break'};}
+    if(t.v==='continue'){this.next();this.expect(';');return {k:'continue'};}
+  }
+  if(t.v==='{')return {k:'block',body:this.parseBlock()};
+  const e=this.parseExpr();this.expect(';');return {k:'expr',expr:e};
+};
+Parser.prototype.parseSimple=function(){
+  const t=this.peek();
+  if(t.t==='id'&&(t.v==='let'||t.v==='var'))return this.parseDecl(false);
+  return this.parseExpr();
+};
+Parser.prototype.parseExpr=function(){return this.parseAssign();};
+Parser.prototype.parseAssign=function(){
+  const left=this.parseOr();
+  if(this.peek().v==='='){
+    this.next();const right=this.parseAssign();
+    if(left.k!=='id')throw new Error('invalid assignment target');
+    return {k:'assign',name:left.name,value:right};
+  }
+  return left;
+};
+Parser.prototype.binLevel=function(nextFn,ops){
+  let left=nextFn.call(this);
+  while(ops.includes(this.peek().v)){
+    const op=this.next().v;const right=nextFn.call(this);
+    left={k:'bin',op:op,left:left,right:right};
+  }
+  return left;
+};
+Parser.prototype.parseOr=function(){return this.binLevel(this.parseAnd,['or','||']);};
+Parser.prototype.parseAnd=function(){return this.binLevel(this.parseBitOr,['and','&&']);};
+Parser.prototype.parseBitOr=function(){return this.binLevel(this.parseBitXor,['|']);};
+Parser.prototype.parseBitXor=function(){return this.binLevel(this.parseBitAnd,['^']);};
+Parser.prototype.parseBitAnd=function(){return this.binLevel(this.parseEquality,['&']);};
+Parser.prototype.parseEquality=function(){return this.binLevel(this.parseRel,['==','!=']);};
+Parser.prototype.parseRel=function(){return this.binLevel(this.parseShift,['<','>','<=','>=']);};
+Parser.prototype.parseShift=function(){return this.binLevel(this.parseAdd,['<<','>>']);};
+Parser.prototype.parseAdd=function(){return this.binLevel(this.parseMul,['+','-']);};
+Parser.prototype.parseMul=function(){return this.binLevel(this.parseUnary,['*','/','%']);};
+Parser.prototype.parseUnary=function(){
+  if(this.eat('-'))return {k:'neg',e:this.parseUnary()};
+  if(this.peek().v==='not'||this.peek().v==='!'){this.next();return {k:'not',e:this.parseUnary()};}
+  if(this.peek().v==='~'){this.next();return {k:'bitnot',e:this.parseUnary()};}
+  if(this.peek().v==='+'){this.next();return this.parseUnary();}
+  return this.parsePostfix();
+};
+Parser.prototype.parsePostfix=function(){
+  let e=this.parsePrimary();
+  while(this.peek().v==='('){
+    if(e.k!=='id')throw new Error('only named functions can be called');
+    this.next();
+    const args=[];
+    if(this.peek().v!==')'){
+      do{args.push(this.parseExpr());}while(this.eat(','));
+    }
+    this.expect(')');
+    e={k:'call',name:e.name,args:args};
+  }
+  return e;
+};
+Parser.prototype.parsePrimary=function(){
+  const t=this.next();
+  if(t.t==='num')return {k:'num',v:t.v};
+  if(t.t==='str')return {k:'str',v:t.v};
+  if(t.t==='id'){
+    if(t.v==='true')return {k:'bool',v:true};
+    if(t.v==='false')return {k:'bool',v:false};
+    if(t.v==='null')return {k:'null'};
+    return {k:'id',name:t.v};
+  }
+  if(t.v==='('){const e=this.parseExpr();this.expect(')');return e;}
+  throw new Error("unexpected token '"+t.v+"'");
+};
+
+class ReturnSignal{constructor(v){this.value=v;}}
+const BREAK={}, CONTINUE={};
+
+function display(v){
+  if(v===null||v===undefined)return 'null';
+  if(typeof v==='boolean')return v?'true':'false';
+  if(typeof v==='number'){
+    if(Number.isInteger(v))return String(v);
+    return String(v);
+  }
+  return String(v);
+}
+
+function runProgram(src){
+  const toks=lex(src);
+  const parser=new Parser(toks);
+  const prog=parser.parseProgram();
+  const out=[];
+  const scopes=[new Map()];
+  const funcs=new Map();
+
+  function define(name,v){scopes[scopes.length-1].set(name,v);}
+  function lookup(name){
+    for(let i=scopes.length-1;i>=0;i--){if(scopes[i].has(name))return scopes[i].get(name);}
+    throw new Error("undefined variable '"+name+"'");
+  }
+  function assign(name,v){
+    for(let i=scopes.length-1;i>=0;i--){if(scopes[i].has(name)){scopes[i].set(name,v);return;}}
+    throw new Error("assignment to undefined variable '"+name+"'");
+  }
+
+  function call(name,args){
+    if(name==='print'||name==='println'){
+      out.push(args.map(display).join('')+'\n');
+      return null;
+    }
+    if(name==='len'||name==='strlen'){
+      if(args.length!==1)throw new Error(name+' expects 1 argument');
+      return String(args[0]).length;
+    }
+    if(name==='to_int'){return Math.trunc(Number(args[0]));}
+    if(name==='to_float'){return Number(args[0]);}
+    const fn=funcs.get(name);
+    if(!fn)throw new Error("undefined function '"+name+"'");
+    if(fn.params.length!==args.length)throw new Error("function '"+name+"' expects "+fn.params.length+" argument(s), got "+args.length);
+    scopes.push(new Map());
+    for(let i=0;i<fn.params.length;i++)define(fn.params[i],args[i]);
+    let result=null;
+    try{
+      for(const s of fn.body)exec(s);
+    }catch(e){
+      if(e instanceof ReturnSignal){result=e.value;}
+      else{scopes.pop();throw e;}
+    }
+    scopes.pop();
+    return result;
+  }
+
+  function evalExpr(e){
+    switch(e.k){
+      case 'num':return e.v;
+      case 'str':return e.v;
+      case 'bool':return e.v;
+      case 'null':return null;
+      case 'id':return lookup(e.name);
+      case 'assign':{const v=evalExpr(e.value);assign(e.name,v);return v;}
+      case 'neg':return -Number(evalExpr(e.e));
+      case 'not':return !truthy(evalExpr(e.e));
+      case 'bitnot':return ~Number(evalExpr(e.e));
+      case 'bin':{
+        const op=e.op;
+        if(op==='and'||op==='&&'){const l=evalExpr(e.left);if(!truthy(l))return false;return truthy(evalExpr(e.right));}
+        if(op==='or'||op==='||'){const l=evalExpr(e.left);if(truthy(l))return true;return truthy(evalExpr(e.right));}
+        const a=evalExpr(e.left), b=evalExpr(e.right);
+        switch(op){
+          case '+':return (typeof a==='string'||typeof b==='string')?String(a)+String(b):a+b;
+          case '-':return a-b;
+          case '*':return a*b;
+          case '/':return a/b;
+          case '%':return a%b;
+          case '==':return a===b;
+          case '!=':return a!==b;
+          case '<':return a<b;
+          case '>':return a>b;
+          case '<=':return a<=b;
+          case '>=':return a>=b;
+          case '&':return Number(a)&Number(b);
+          case '|':return Number(a)|Number(b);
+          case '^':return Number(a)^Number(b);
+          case '<<':return Number(a)<<Number(b);
+          case '>>':return Number(a)>>Number(b);
+        }
+        throw new Error('unknown operator '+op);
+      }
+      case 'call':{
+        const args=e.args.map(evalExpr);
+        return call(e.name,args);
+      }
+    }
+    throw new Error('cannot evaluate expression');
+  }
+
+  function truthy(v){
+    if(typeof v==='boolean')return v;
+    if(typeof v==='number')return v!==0;
+    if(typeof v==='string')return v.length>0;
+    return v!==null;
+  }
+
+  function execBlock(body){
+    scopes.push(new Map());
+    try{for(const s of body)exec(s);}finally{scopes.pop();}
+  }
+
+  function exec(s){
+    switch(s.k){
+      case 'decl':define(s.name,evalExpr(s.init));return;
+      case 'func':funcs.set(s.name,{params:s.params,body:s.body});return;
+      case 'expr':evalExpr(s.expr);return;
+      case 'block':execBlock(s.body);return;
+      case 'if':{
+        if(truthy(evalExpr(s.cond)))execBlock(s.thenB);
+        else execBlock(s.elseB);
+        return;
+      }
+      case 'while':{
+        while(truthy(evalExpr(s.cond))){
+          try{execBlock(s.body);}
+          catch(e){if(e===BREAK)break;if(e===CONTINUE)continue;throw e;}
+        }
+        return;
+      }
+      case 'for':{
+        scopes.push(new Map());
+        try{
+          if(s.init){if(s.init.k==='decl')define(s.init.name,evalExpr(s.init.init));else evalExpr(s.init);}
+          while(!s.cond||truthy(evalExpr(s.cond))){
+            try{execBlock(s.body);}
+            catch(e){
+              if(e===BREAK)break;
+              if(e===CONTINUE){/* fallthrough to update */}
+              else throw e;
+            }
+            if(s.upd){if(s.upd.k==='decl')define(s.upd.name,evalExpr(s.upd.init));else evalExpr(s.upd);}
+          }
+        }finally{scopes.pop();}
+        return;
+      }
+      case 'return':throw new ReturnSignal(s.value?evalExpr(s.value):null);
+      case 'break':throw BREAK;
+      case 'continue':throw CONTINUE;
+    }
+    throw new Error('unknown statement');
+  }
+
+  try{
+    for(const s of prog)exec(s);
+  }catch(e){
+    if(e instanceof ReturnSignal){/* top-level return */ }
+    else throw e;
+  }
+  return out.join('');
+}
+
+/* ---------- UI ---------- */
+
+const outEl=document.getElementById('output');
+const codeEl=document.getElementById('code');
+const runBtn=document.getElementById('runBtn');
+const clearBtn=document.getElementById('clearBtn');
+
+function doRun(){
+  outEl.innerHTML='';
+  try{
+    const text=runProgram(codeEl.value);
+    outEl.textContent=text.length?text:'(пусто)';
+  }catch(e){
+    const span=document.createElement('span');
+    span.className='err';
+    span.textContent='Ошибка: '+(e&&e.message?e.message:e);
+    outEl.appendChild(span);
+  }
+}
+
+runBtn.addEventListener('click',doRun);
+clearBtn.addEventListener('click',()=>{outEl.textContent='вывод очищен';});
+codeEl.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();doRun();}
+});
+
+// copy buttons
+document.querySelectorAll('pre').forEach(pre=>{
+  const wrap=pre.parentElement;
+  if(!wrap.classList.contains('code-wrap'))return;
+  const btn=document.createElement('button');
+  btn.className='copy';
+  btn.textContent='Copy';
+  btn.addEventListener('click',()=>{
+    const text=pre.querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(()=>{
+      btn.textContent='Copied!';
+      setTimeout(()=>btn.textContent='Copy',1200);
+    });
+  });
+  wrap.appendChild(btn);
+});
+
+// active nav highlight
+const links=[...document.querySelectorAll('nav a')];
+const sections=[...document.querySelectorAll('main section')];
+function updateActive(){
+  let current=sections[0]?sections[0].id:null;
+  const y=window.scrollY+120;
+  for(const sec of sections){if(sec.offsetTop<=y)current=sec.id;}
+  links.forEach(a=>{
+    a.classList.toggle('active',a.getAttribute('href')==='#'+current);
+  });
+}
+window.addEventListener('scroll',updateActive,{passive:true});
+window.addEventListener('load',updateActive);
+</script>
+</body>
+</html>

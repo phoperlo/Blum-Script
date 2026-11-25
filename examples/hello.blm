@@ -1,0 +1,28 @@
+func fib(n: int) -> int {
+    var a: int = 0;
+    var b: int = 1;
+    var i: int = 0;
+    while (i < n) {
+        let tmp: int = a + b;
+        a = b;
+        b = tmp;
+        i = i + 1;
+    }
+    return a;
+}
+
+func main() -> int {
+    print("Hello, BlumScript!");
+    print("fib(10) =", fib(10));
+    var total: int = 0;
+    for (var j: int = 1; j <= 5; j = j + 1) {
+        total = total + j;
+    }
+    print("sum 1..5 =", total);
+    if (total == 15) {
+        print("math works");
+    } else {
+        print("math broken");
+    }
+    return 0;
+}

@@ -1,0 +1,20 @@
+import "utils.blm";
+
+func fact(n: int) -> int {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * fact(n - 1);
+}
+
+func main() -> int {
+    print("square(9) =", square(9));
+    print("cube(3) =", cube(3));
+    print("fact(6) =", fact(6));
+
+    asm {
+        printf("raw C asm block works\n");
+    }
+
+    return 0;
+}

@@ -1,0 +1,27 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Packaged distributions
+/dist/
+/*.zip
+
+# Generated C, objects and binaries from examples
+/examples/*.c
+/examples/*.exe
+/examples/*.obj
+/examples/*.pdb
+/examples/*.ilk
+*.obj
+*.pdb
+*.ilk
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Local notes
+*.local.md
