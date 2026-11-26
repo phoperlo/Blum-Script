@@ -21,6 +21,12 @@ pub const R13: u8 = 13;
 pub const R14: u8 = 14;
 pub const R15: u8 = 15;
 
+// XMM registers are numbered like their GPR counterparts (0..15).
+pub const XMM0: u8 = 0;
+pub const XMM1: u8 = 1;
+pub const XMM2: u8 = 2;
+pub const XMM3: u8 = 3;
+
 // condition codes
 pub const CC_O: u8 = 0;
 pub const CC_NO: u8 = 1;
@@ -32,6 +38,8 @@ pub const CC_BE: u8 = 6;
 pub const CC_A: u8 = 7;
 pub const CC_S: u8 = 8;
 pub const CC_NS: u8 = 9;
+pub const CC_P: u8 = 10;
+pub const CC_NP: u8 = 11;
 pub const CC_L: u8 = 12;
 pub const CC_GE: u8 = 13;
 pub const CC_LE: u8 = 14;
@@ -370,6 +378,20 @@ impl Asm {
         self.rr(&[0xD3], true, 4, r);
     }
 
+    pub fn shl_imm(&mut self, r: u8, imm: u8) {
+        self.rex(true, 0, r);
+        self.code.push(0xC1);
+        self.code.push(0xC0 | (4 << 3) | (r & 7));
+        self.code.push(imm);
+    }
+
+    pub fn shr_imm(&mut self, r: u8, imm: u8) {
+        self.rex(true, 0, r);
+        self.code.push(0xC1);
+        self.code.push(0xC0 | (5 << 3) | (r & 7));
+        self.code.push(imm);
+    }
+
     pub fn shr_cl(&mut self, r: u8) {
         self.rr(&[0xD3], true, 5, r);
     }
@@ -380,6 +402,111 @@ impl Asm {
 
     pub fn setcc(&mut self, cc: u8) {
         self.code.extend_from_slice(&[0x0F, 0x90 + cc, 0xC0]);
+    }
+
+    // ---- SSE2 (scalar double) ----
+
+    fn sse_rr(&mut self, prefix: Option<u8>, w: bool, reg: u8, rm: u8, op: &[u8]) {
+        if let Some(p) = prefix {
+            self.code.push(p);
+        }
+        self.rex(w, reg, rm);
+        self.code.extend_from_slice(op);
+        self.code.push(0xC0 | ((reg & 7) << 3) | (rm & 7));
+    }
+
+    fn sse_m(&mut self, prefix: Option<u8>, w: bool, reg: u8, base: u8, disp: i32, op: &[u8]) {
+        if let Some(p) = prefix {
+            self.code.push(p);
+        }
+        self.rex(w, reg, base);
+        self.code.extend_from_slice(op);
+        let b = base & 7;
+        self.code.push(0x80 | ((reg & 7) << 3) | b);
+        if b == 4 {
+            self.code.push(0x24);
+        }
+        self.code.extend_from_slice(&disp.to_le_bytes());
+    }
+
+    fn sse_rip(&mut self, prefix: Option<u8>, w: bool, reg: u8, fix: Fixup, op: &[u8]) {
+        if let Some(p) = prefix {
+            self.code.push(p);
+        }
+        self.rex(w, reg, 0);
+        self.code.extend_from_slice(op);
+        self.code.push(((reg & 7) << 3) | 0x05);
+        let at = self.code.len() as u32;
+        self.code.extend_from_slice(&[0, 0, 0, 0]);
+        self.fixups.push((at, fix));
+    }
+
+    /// `movsd xmm, [base + disp]`
+    pub fn movsd_xmm_mem(&mut self, dst: u8, base: u8, disp: i32) {
+        self.sse_m(Some(0xF2), false, dst, base, disp, &[0x0F, 0x10]);
+    }
+
+    /// `movsd [base + disp], xmm`
+    pub fn movsd_mem_xmm(&mut self, base: u8, disp: i32, src: u8) {
+        self.sse_m(Some(0xF2), false, src, base, disp, &[0x0F, 0x11]);
+    }
+
+    /// `movsd xmm, [rip + disp32]`
+    pub fn movsd_xmm_rip(&mut self, dst: u8, fix: Fixup) {
+        self.sse_rip(Some(0xF2), false, dst, fix, &[0x0F, 0x10]);
+    }
+
+    /// `movsd [rip + disp32], xmm`
+    pub fn movsd_mem_xmm_rip(&mut self, fix: Fixup, src: u8) {
+        self.sse_rip(Some(0xF2), false, src, fix, &[0x0F, 0x11]);
+    }
+
+    pub fn movsd_xmm_xmm(&mut self, dst: u8, src: u8) {
+        self.sse_rr(Some(0xF2), false, dst, src, &[0x0F, 0x10]);
+    }
+
+    pub fn addsd(&mut self, dst: u8, src: u8) {
+        self.sse_rr(Some(0xF2), false, dst, src, &[0x0F, 0x58]);
+    }
+
+    pub fn subsd(&mut self, dst: u8, src: u8) {
+        self.sse_rr(Some(0xF2), false, dst, src, &[0x0F, 0x5C]);
+    }
+
+    pub fn mulsd(&mut self, dst: u8, src: u8) {
+        self.sse_rr(Some(0xF2), false, dst, src, &[0x0F, 0x59]);
+    }
+
+    pub fn divsd(&mut self, dst: u8, src: u8) {
+        self.sse_rr(Some(0xF2), false, dst, src, &[0x0F, 0x5E]);
+    }
+
+    pub fn ucomisd(&mut self, a: u8, b: u8) {
+        self.sse_rr(Some(0x66), false, a, b, &[0x0F, 0x2E]);
+    }
+
+    /// `cvtsi2sd xmm, r64`
+    pub fn cvtsi2sd(&mut self, xmm: u8, r: u8) {
+        self.sse_rr(Some(0xF2), true, xmm, r, &[0x0F, 0x2A]);
+    }
+
+    /// `cvttsd2si r64, xmm`
+    pub fn cvttsd2si(&mut self, r: u8, xmm: u8) {
+        self.sse_rr(Some(0xF2), true, r, xmm, &[0x0F, 0x2C]);
+    }
+
+    /// `movq xmm, r64`
+    pub fn movq_xmm_r64(&mut self, xmm: u8, r: u8) {
+        self.sse_rr(Some(0x66), true, xmm, r, &[0x0F, 0x6E]);
+    }
+
+    /// `movq r64, xmm`
+    pub fn movq_r64_xmm(&mut self, r: u8, xmm: u8) {
+        self.sse_rr(Some(0x66), true, r, xmm, &[0x0F, 0x7E]);
+    }
+
+    pub fn xorpd(&mut self, dst: u8, src: u8) {
+        self.sse_rr(Some(0x66), false, dst, src, &[0x0F, 0x57]);
     }
 
     // ---- control flow ----

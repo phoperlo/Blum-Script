@@ -24,6 +24,37 @@ pub struct Output {
     pub entry: u32,
 }
 
+/// Where an argument/parameter lives under the Microsoft x64 ABI.
+#[derive(Clone, Copy, Debug)]
+pub enum AbiSlot {
+    Gpr(usize),
+    Xmm(usize),
+    Stack(usize),
+}
+
+pub fn abi_assign(tys: &[Type]) -> Vec<AbiSlot> {
+    let mut out = Vec::with_capacity(tys.len());
+    let mut ik = 0usize;
+    let mut fk = 0usize;
+    let mut sk = 0usize;
+    for t in tys {
+        if matches!(t, Type::Float) {
+            if fk < 4 {
+                out.push(AbiSlot::Xmm(fk));
+                fk += 1;
+                continue;
+            }
+        } else if ik < 4 {
+            out.push(AbiSlot::Gpr(ik));
+            ik += 1;
+            continue;
+        }
+        out.push(AbiSlot::Stack(sk));
+        sk += 1;
+    }
+    out
+}
+
 pub fn is_ptr(t: &Type) -> bool {
     matches!(t, Type::Ptr(_) | Type::String)
 }
@@ -40,6 +71,7 @@ pub struct Native {
     asm: Asm,
     rdata: Vec<u8>,
     strings: HashMap<String, u32>,
+    fconsts: HashMap<u64, u32>,
     data: Vec<u8>,
     globals: HashMap<String, (Type, u32)>,
     structs: HashMap<String, StructInfo>,
@@ -53,6 +85,7 @@ pub struct Native {
     depth: usize,
     breaks: Vec<u32>,
     continues: Vec<u32>,
+    cur_ret: Type,
     entry: u32,
 }
 
@@ -61,6 +94,7 @@ pub fn compile(program: &[Stmt]) -> Result<Output, String> {
         asm: Asm::new(),
         rdata: Vec::new(),
         strings: HashMap::new(),
+        fconsts: HashMap::new(),
         data: vec![0u8; DATA_HEAD],
         globals: HashMap::new(),
         structs: HashMap::new(),
@@ -74,6 +108,7 @@ pub fn compile(program: &[Stmt]) -> Result<Output, String> {
         depth: 0,
         breaks: Vec::new(),
         continues: Vec::new(),
+        cur_ret: Type::Void,
         entry: 0,
     };
 
@@ -293,6 +328,10 @@ impl Native {
 
     fn store_slot(&mut self, off: usize, t: &Type) -> Result<(), String> {
         let d = -(off as i32);
+        if matches!(t, Type::Float) {
+            self.asm.movsd_mem_xmm(RBP, d, XMM0);
+            return Ok(());
+        }
         match self.size_of(t)? {
             1 => self.asm.store8(RBP, d, RAX),
             8 => self.asm.store(RBP, d, RAX),
@@ -302,6 +341,11 @@ impl Native {
     }
 
     fn store_global(&mut self, off: u32, t: &Type) -> Result<(), String> {
+        if matches!(t, Type::Float) {
+            let fix = Fixup::Data(off);
+            self.asm.movsd_mem_xmm_rip(fix, XMM0);
+            return Ok(());
+        }
         match self.size_of(t)? {
             1 => self.asm.store_rip8(RAX, Fixup::Data(off)),
             8 => self.asm.store_rip(RAX, Fixup::Data(off)),
@@ -338,6 +382,21 @@ impl Native {
         Ok(off)
     }
 
+    /// Intern an `f64` constant, 8-byte aligned, and return its `.rdata` offset.
+    fn intern_f64(&mut self, v: f64) -> u32 {
+        let bits = v.to_bits();
+        if let Some(o) = self.fconsts.get(&bits) {
+            return *o;
+        }
+        while self.rdata.len() % 8 != 0 {
+            self.rdata.push(0);
+        }
+        let off = self.rdata.len() as u32;
+        self.rdata.extend_from_slice(&bits.to_le_bytes());
+        self.fconsts.insert(bits, off);
+        off
+    }
+
     // ---------------- function prologue / epilogue ----------------
 
     fn emit_fn(&mut self, f: &FuncDecl) -> Result<(), String> {
@@ -356,13 +415,17 @@ impl Native {
         self.frame = 0;
         self.max_frame = 0;
         self.depth = 0;
+        self.cur_ret = f.ret.clone();
         self.scopes.clear();
         self.breaks.clear();
         self.continues.clear();
         self.scopes.push(Vec::new());
 
+        let ptypes: Vec<Type> = f.params.iter().map(|(_, t)| t.clone()).collect();
+        let slots = abi_assign(&ptypes);
         let regs = [RCX, RDX, R8, R9];
-        for (i, (name, ty)) in f.params.iter().enumerate() {
+        let xmms = [XMM0, XMM1, XMM2, XMM3];
+        for ((name, ty), slot) in f.params.iter().zip(slots.iter()) {
             let sz = self.size_of(ty)?;
             if sz > 8 {
                 return Err(format!(
@@ -371,12 +434,23 @@ impl Native {
                 ));
             }
             let off = self.alloc(sz);
-            if i < 4 {
-                self.asm.store(RBP, -(off as i32), regs[i]);
-            } else {
-                let src = 16 + 8 * (i as i32 - 4);
-                self.asm.load(RAX, RBP, src);
-                self.asm.store(RBP, -(off as i32), RAX);
+            let d = -(off as i32);
+            let is_f = matches!(ty, Type::Float);
+            match slot {
+                AbiSlot::Gpr(i) => self.asm.store(RBP, d, regs[*i]),
+                AbiSlot::Xmm(i) => self.asm.movsd_mem_xmm(RBP, d, xmms[*i]),
+                AbiSlot::Stack(k) => {
+                    // [rbp+8] return address, [rbp+16..48) shadow space,
+                    // so the first stack argument lives at [rbp+48].
+                    let src = 48 + 8 * (*k as i32);
+                    if is_f {
+                        self.asm.movsd_xmm_mem(XMM0, RBP, src);
+                        self.asm.movsd_mem_xmm(RBP, d, XMM0);
+                    } else {
+                        self.asm.load(RAX, RBP, src);
+                        self.asm.store(RBP, d, RAX);
+                    }
+                }
             }
             self.scopes
                 .last_mut()
@@ -478,7 +552,8 @@ impl Native {
                     }
                     self.zero_slot(off, sz)?;
                 } else {
-                    self.expr(init)?;
+                    let vt = self.expr(init)?;
+                    self.coerce_to(&vt, &t)?;
                     self.store_slot(off, &t)?;
                 }
                 self.scopes
@@ -489,10 +564,12 @@ impl Native {
             }
             Stmt::Assign(name, e) => {
                 if let Some((t, off)) = self.find_local(name) {
-                    self.expr(e)?;
+                    let vt = self.expr(e)?;
+                    self.coerce_to(&vt, &t)?;
                     self.store_slot(off, &t)
                 } else if let Some((t, off)) = self.globals.get(name).cloned() {
-                    self.expr(e)?;
+                    let vt = self.expr(e)?;
+                    self.coerce_to(&vt, &t)?;
                     self.store_global(off, &t)
                 } else {
                     Err(format!("assignment to undefined variable '{}'", name))
@@ -501,9 +578,7 @@ impl Native {
             Stmt::If(cond, then_b, else_b) => {
                 let lelse = self.asm.label();
                 let lend = self.asm.label();
-                self.expr(cond)?;
-                self.asm.test_rr(RAX, RAX);
-                self.asm.jcc(CC_E, lelse);
+                self.jump_if_false(cond, lelse)?;
                 self.stmts(then_b)?;
                 self.asm.jmp(lend);
                 self.asm.bind(lelse);
@@ -515,9 +590,7 @@ impl Native {
                 let top = self.asm.label();
                 let end = self.asm.label();
                 self.asm.bind(top);
-                self.expr(cond)?;
-                self.asm.test_rr(RAX, RAX);
-                self.asm.jcc(CC_E, end);
+                self.jump_if_false(cond, end)?;
                 self.breaks.push(end);
                 self.continues.push(top);
                 let r = self.stmts(body);
@@ -532,7 +605,9 @@ impl Native {
             Stmt::Return(v) => {
                 match v {
                     Some(e) => {
-                        self.expr(e)?;
+                        let vt = self.expr(e)?;
+                        let rt = self.cur_ret.clone();
+                        self.coerce_to(&vt, &rt)?;
                     }
                     None => self.asm.mov_imm64(RAX, 0),
                 }
@@ -584,9 +659,7 @@ impl Native {
             let end = self.asm.label();
             self.asm.bind(top);
             let r = (|| -> Result<(), String> {
-                self.expr(cond)?;
-                self.asm.test_rr(RAX, RAX);
-                self.asm.jcc(CC_E, end);
+                self.jump_if_false(cond, end)?;
                 self.breaks.push(end);
                 self.continues.push(upd);
                 let r = self.stmts(body);
@@ -707,9 +780,11 @@ impl Native {
                 self.asm.mov_imm64(RAX, *v);
                 Ok(Type::Int)
             }
-            Expr::Float(_) => Err(
-                "floating-point values are not supported by the native backend yet".into(),
-            ),
+            Expr::Float(v) => {
+                let o = self.intern_f64(*v);
+                self.asm.movsd_xmm_rip(XMM0, Fixup::Rdata(o));
+                Ok(Type::Float)
+            }
             Expr::Str(s) => {
                 let o = self.intern(s)?;
                 self.asm.lea_rip(RAX, Fixup::Rdata(o));
@@ -730,15 +805,21 @@ impl Native {
             Expr::Ident(name) => {
                 if let Some((t, off)) = self.find_local(name) {
                     let d = -(off as i32);
-                    match self.size_of(&t)? {
-                        1 => self.asm.load8zx(RAX, RBP, d),
-                        n if n > 8 => self.asm.lea(RAX, RBP, d),
-                        _ => self.asm.load(RAX, RBP, d),
+                    if matches!(t, Type::Float) {
+                        self.asm.movsd_xmm_mem(XMM0, RBP, d);
+                    } else {
+                        match self.size_of(&t)? {
+                            1 => self.asm.load8zx(RAX, RBP, d),
+                            n if n > 8 => self.asm.lea(RAX, RBP, d),
+                            _ => self.asm.load(RAX, RBP, d),
+                        }
                     }
                     Ok(t)
                 } else if let Some((t, off)) = self.globals.get(name).cloned() {
                     let fix = Fixup::Data(off);
-                    if self.size_of(&t)? == 1 {
+                    if matches!(t, Type::Float) {
+                        self.asm.movsd_xmm_rip(XMM0, fix);
+                    } else if self.size_of(&t)? == 1 {
                         self.asm.load8zx_rip(RAX, fix);
                     } else {
                         self.asm.load_rip(RAX, fix);
@@ -758,11 +839,13 @@ impl Native {
             }
             Expr::Assign(name, v) => {
                 if let Some((t, off)) = self.find_local(name) {
-                    self.expr(v)?;
+                    let vt = self.expr(v)?;
+                    self.coerce_to(&vt, &t)?;
                     self.store_slot(off, &t)?;
                     Ok(t)
                 } else if let Some((t, off)) = self.globals.get(name).cloned() {
-                    self.expr(v)?;
+                    let vt = self.expr(v)?;
+                    self.coerce_to(&vt, &t)?;
                     self.store_global(off, &t)?;
                     Ok(t)
                 } else {
@@ -773,9 +856,14 @@ impl Native {
                 let t = self.addr(lv)?;
                 self.asm.push_r(RAX);
                 self.depth += 8;
-                self.expr(v)?;
+                let vt = self.expr(v)?;
                 self.asm.pop_r(RCX);
                 self.depth -= 8;
+                self.coerce_to(&vt, &t)?;
+                if matches!(t, Type::Float) {
+                    self.asm.movsd_mem_xmm(RCX, 0, XMM0);
+                    return Ok(t);
+                }
                 match self.size_of(&t)? {
                     1 => self.asm.store8(RCX, 0, RAX),
                     8 => self.asm.store(RCX, 0, RAX),
@@ -784,7 +872,14 @@ impl Native {
                 Ok(t)
             }
             Expr::Cast(t, x) => {
-                self.expr(x)?;
+                let st = self.expr(x)?;
+                let from_f = matches!(st, Type::Float);
+                let to_f = matches!(t, Type::Float);
+                if to_f && !from_f {
+                    self.asm.cvtsi2sd(XMM0, RAX);
+                } else if from_f && !to_f {
+                    self.asm.cvttsd2si(RAX, XMM0);
+                }
                 Ok(t.clone())
             }
             Expr::Sizeof(t) => {
@@ -842,7 +937,29 @@ impl Native {
         }
     }
 
-    fn binary_arith(&mut self, op: BinOp, l: &Expr, r: &Expr) -> Result<Type, String> {
+    /// Evaluate a condition and jump to `target` when it is false.
+    /// Floats compare against 0.0; NaN counts as true (C semantics).
+    fn jump_if_false(&mut self, cond: &Expr, target: u32) -> Result<(), String> {
+        let t = self.expr(cond)?;
+        if matches!(t, Type::Float) {
+            self.asm.xorpd(XMM1, XMM1);
+            self.asm.ucomisd(XMM0, XMM1);
+            let truthy = self.asm.label();
+            self.asm.jcc(CC_P, truthy);
+            self.asm.jcc(CC_E, target);
+            self.asm.bind(truthy);
+        } else {
+            self.asm.test_rr(RAX, RAX);
+            self.asm.jcc(CC_E, target);
+        }
+        Ok(())
+    }
+
+    fn binary_arith(&mut self, op: BinOp, l: &Expr, r: &Expr) -> Result<Type, String> {        let lt0 = self.type_of(l)?;
+        let rt0 = self.type_of(r)?;
+        if matches!(lt0, Type::Float) || matches!(rt0, Type::Float) {
+            return self.binary_float(op, l, r, &lt0, &rt0);
+        }
         let lt = self.expr(l)?;
         self.asm.push_r(RAX);
         self.depth += 8;
@@ -964,17 +1081,128 @@ impl Native {
         }
     }
 
+    /// Convert the value currently in RAX (integer) or XMM0 (float) so that it
+    /// matches the representation of `to`.
+    fn coerce_to(&mut self, from: &Type, to: &Type) -> Result<(), String> {
+        let ff = matches!(from, Type::Float);
+        let tf = matches!(to, Type::Float);
+        if tf && !ff {
+            self.asm.cvtsi2sd(XMM0, RAX);
+        } else if ff && !tf {
+            self.asm.cvttsd2si(RAX, XMM0);
+        }
+        Ok(())
+    }
+
+    /// Evaluate `e` and leave a `double` in XMM0 (ints are converted).
+    fn to_xmm0(&mut self, e: &Expr) -> Result<Type, String> {
+        let t = self.expr(e)?;
+        if !matches!(t, Type::Float) {
+            self.asm.cvtsi2sd(XMM0, RAX);
+        }
+        Ok(t)
+    }
+
+    /// Floating-point arithmetic and comparisons; result in XMM0 (or RAX for bool).
+    fn binary_float(
+        &mut self,
+        op: BinOp,
+        l: &Expr,
+        r: &Expr,
+        lt0: &Type,
+        rt0: &Type,
+    ) -> Result<Type, String> {
+        if matches!(
+            op,
+            BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Shl
+                | BinOp::Shr
+                | BinOp::Mod
+        ) {
+            return Err(format!(
+                "operator '{}' is not defined for floating-point values",
+                op.c()
+            ));
+        }
+
+        self.to_xmm0(l)?;
+        self.asm.sub_rsp(8);
+        self.depth += 8;
+        self.asm.movsd_mem_xmm(RSP, 0, XMM0);
+        self.to_xmm0(r)?;
+        self.asm.movsd_xmm_xmm(XMM1, XMM0);
+        self.asm.movsd_xmm_mem(XMM0, RSP, 0);
+        self.asm.add_rsp(8);
+        self.depth -= 8;
+
+        let _ = (lt0, rt0);
+        match op {
+            BinOp::Add => {
+                self.asm.addsd(XMM0, XMM1);
+                Ok(Type::Float)
+            }
+            BinOp::Sub => {
+                self.asm.subsd(XMM0, XMM1);
+                Ok(Type::Float)
+            }
+            BinOp::Mul => {
+                self.asm.mulsd(XMM0, XMM1);
+                Ok(Type::Float)
+            }
+            BinOp::Div => {
+                self.asm.divsd(XMM0, XMM1);
+                Ok(Type::Float)
+            }
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                self.asm.ucomisd(XMM0, XMM1);
+                let cc = match op {
+                    BinOp::Eq => CC_E,
+                    BinOp::Ne => CC_NE,
+                    // ucomisd: CF=1 when left < right, ZF=1 when equal
+                    BinOp::Lt => CC_B,
+                    BinOp::Le => CC_BE,
+                    BinOp::Gt => CC_A,
+                    _ => CC_AE,
+                };
+                self.asm.setcc(cc);
+                self.asm.movzx_rr8(RAX, RAX);
+                Ok(Type::Bool)
+            }
+            _ => Err(format!("operator '{}' is not supported", op.c())),
+        }
+    }
+
     fn unary(&mut self, op: UnOp, x: &Expr) -> Result<Type, String> {
         match op {
             UnOp::Neg => {
                 let t = self.expr(x)?;
-                self.asm.neg_r(RAX);
+                if matches!(t, Type::Float) {
+                    // flip the sign bit: xmm0 -> rax, xor 0x8000000000000000, back
+                    self.asm.movq_r64_xmm(RAX, XMM0);
+                    self.asm.mov_imm64(RCX, i64::MIN);
+                    self.asm.xor_rr(RAX, RCX);
+                    self.asm.movq_xmm_r64(XMM0, RAX);
+                } else {
+                    self.asm.neg_r(RAX);
+                }
                 Ok(t)
             }
             UnOp::Not => {
-                self.expr(x)?;
-                self.asm.test_rr(RAX, RAX);
-                self.asm.setcc(CC_E);
+                let t = self.expr(x)?;
+                if matches!(t, Type::Float) {
+                    self.asm.xorpd(XMM1, XMM1);
+                    self.asm.ucomisd(XMM0, XMM1);
+                    self.asm.setcc(CC_E);
+                    let not_nan = self.asm.label();
+                    self.asm.jcc(CC_NP, not_nan);
+                    self.asm.mov_imm64(RAX, 0); // NaN is truthy -> !NaN == false
+                    self.asm.bind(not_nan);
+                } else {
+                    self.asm.test_rr(RAX, RAX);
+                    self.asm.setcc(CC_E);
+                }
                 self.asm.movzx_rr8(RAX, RAX);
                 Ok(Type::Bool)
             }
@@ -989,11 +1217,18 @@ impl Native {
                 self.load_at_rax(&p)?;
                 Ok(p)
             }
-            UnOp::AddrOf => self.addr(x),
+            UnOp::AddrOf => {
+                let t = self.addr(x)?;
+                Ok(Type::Ptr(Box::new(t)))
+            }
         }
     }
 
     fn load_at_rax(&mut self, t: &Type) -> Result<(), String> {
+        if matches!(t, Type::Float) {
+            self.asm.movsd_xmm_mem(XMM0, RAX, 0);
+            return Ok(());
+        }
         match self.size_of(t)? {
             1 => self.asm.load8zx(RAX, RAX, 0),
             8 => self.asm.load(RAX, RAX, 0),
@@ -1154,7 +1389,7 @@ impl Native {
                 self.asm.mov_rr(RCX, RAX);
                 self.call_rt("bs_print_hex")
             }
-            Type::Float => Err("printing floats is not supported by the native backend".into()),
+            Type::Float => self.call_rt("bs_print_float"),
             Type::Void => Err("cannot print a void expression".into()),
         }
     }
@@ -1200,10 +1435,22 @@ impl Native {
                 if args.len() != 1 {
                     return Err("to_int() expects 1 argument".into());
                 }
-                self.expr(&args[0])?;
+                let t = self.expr(&args[0])?;
+                if matches!(t, Type::Float) {
+                    self.asm.cvttsd2si(RAX, XMM0);
+                }
                 Ok(Type::Int)
             }
-            "to_float" => Err("to_float() is not supported by the native backend".into()),
+            "to_float" => {
+                if args.len() != 1 {
+                    return Err("to_float() expects 1 argument".into());
+                }
+                let t = self.expr(&args[0])?;
+                if !matches!(t, Type::Float) {
+                    self.asm.cvtsi2sd(XMM0, RAX);
+                }
+                Ok(Type::Float)
+            }
             "read_str" => {
                 if !args.is_empty() {
                     return Err("read_str() takes no arguments".into());
@@ -1303,33 +1550,84 @@ impl Native {
             ));
         }
         let lbl = *self.fn_labels.get(name).unwrap();
+
+        // Argument classes come from the parameter types so the frame layout
+        // matches the callee even when an argument is an int literal for a
+        // float slot (or vice versa).
+        let tys: Vec<Type> = f.params.iter().map(|(_, pt)| pt.clone()).collect();
+        let slots = abi_assign(&tys);
         let n = args.len();
-        let pad = if ((self.depth / 8) + n) % 2 == 1 {
-            8u32
-        } else {
-            0
+        let nstack = slots
+            .iter()
+            .filter(|s| matches!(s, AbiSlot::Stack(_)))
+            .count();
+
+        let staging = (n * 8) as u32;
+        let outgoing = 32 + (nstack as u32) * 8;
+        let pad = {
+            let total = self.depth as u32 + staging + outgoing;
+            if total % 16 == 0 {
+                0
+            } else {
+                16 - (total % 16)
+            }
         };
+
         if pad != 0 {
-            self.asm.sub_rsp(8);
-            self.depth += 8;
+            self.asm.sub_rsp(pad);
+            self.depth += pad as usize;
         }
-        for a in args.iter().rev() {
-            self.expr(a)?;
-            self.asm.push_r(RAX);
-            self.depth += 8;
+        self.asm.sub_rsp(staging);
+        self.depth += staging as usize;
+
+        // Evaluate left-to-right into the staging area. The storage class is
+        // decided by the parameter type: a 5th+ float argument goes to the
+        // stack, but must still be staged as a double (XMM0), not as an integer.
+        for (i, (a, t)) in args.iter().zip(tys.iter()).enumerate() {
+            let at = (i * 8) as i32;
+            if matches!(t, Type::Float) {
+                self.to_xmm0(a)?;
+                self.asm.movsd_mem_xmm(RSP, at, XMM0);
+            } else {
+                let vt = self.expr(a)?;
+                self.coerce_to(&vt, t)?;
+                self.asm.store(RSP, at, RAX);
+            }
         }
+
+        if outgoing != 32 {
+            self.asm.sub_rsp(outgoing);
+        } else {
+            self.asm.sub_rsp(32);
+        }
+        self.depth += outgoing as usize;
+
+        let base = outgoing as i32; // staging offset relative to current rsp
+        // stack arguments, in order
+        for (i, slot) in slots.iter().enumerate() {
+            if let AbiSlot::Stack(k) = slot {
+                self.asm.load(RAX, RSP, base + (i * 8) as i32);
+                self.asm.store(RSP, 32 + (*k as i32) * 8, RAX);
+            }
+        }
+        // register arguments
         let regs = [RCX, RDX, R8, R9];
-        let nreg = n.min(4);
-        for i in 0..nreg {
-            self.asm.pop_r(regs[i]);
-            self.depth -= 8;
+        let xmms = [XMM0, XMM1, XMM2, XMM3];
+        for (i, slot) in slots.iter().enumerate() {
+            match slot {
+                AbiSlot::Gpr(k) => self.asm.load(regs[*k], RSP, base + (i * 8) as i32),
+                AbiSlot::Xmm(k) => {
+                    self.asm.movsd_xmm_mem(xmms[*k], RSP, base + (i * 8) as i32)
+                }
+                AbiSlot::Stack(_) => {}
+            }
         }
-        self.asm.sub_rsp(32);
-        self.depth += 32;
+
         self.asm.call_rel(lbl);
-        let cleanup = 32 + ((n - nreg) as u32) * 8 + pad;
+        let cleanup = outgoing + staging + pad;
         self.asm.add_rsp(cleanup);
         self.depth -= cleanup as usize;
+
         Ok(f.ret)
     }
 }

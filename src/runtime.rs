@@ -427,6 +427,142 @@ pub fn emit(asm: &mut Asm, null_off: u32) -> Labels {
     asm.leave();
     asm.ret();
 
+    // ---------------- bs_print_float(xmm0 = double) ----------------
+    // Prints sign, integer part, '.' and six fractional digits.
+    let pf = asm.label();
+    l.insert("bs_print_float".into(), pf);
+    asm.bind(pf);
+    asm.push_r(RBP);
+    asm.mov_rr(RBP, RSP);
+    asm.sub_rsp(96);
+    asm.movsd_mem_xmm(RBP, -8, XMM0);
+
+    // NaN / +-Inf are handled by dedicated blocks appended at the end.
+    let f_nan = asm.label();
+    let f_inf = asm.label();
+    asm.movq_r64_xmm(RAX, XMM0);
+    asm.mov_imm64(RCX, 0x7FFF_FFFF_FFFF_FFFFu64 as i64);
+    asm.and_rr(RAX, RCX);
+    asm.mov_imm64(RDX, 0x7FF0_0000_0000_0000u64 as i64);
+    asm.cmp_rr(RAX, RDX);
+    asm.jcc(CC_A, f_nan);
+    asm.jcc(CC_E, f_inf);
+
+    let f_pos = asm.label();
+    asm.movq_r64_xmm(RAX, XMM0);
+    asm.test_rr(RAX, RAX);
+    asm.jcc(CC_NS, f_pos);
+    // '-' to the char buffer
+    asm.mov_imm64(RCX, b'-' as i64);
+    asm.store_rip8(RCX, Fixup::Data(D_CHARBUF));
+    asm.lea_rip(RCX, Fixup::Data(D_CHARBUF));
+    asm.mov_imm64(RDX, 1);
+    asm.call_rel(w);
+    // WriteFile may clobber XMM0 (volatile), so reload the value
+    asm.movsd_xmm_mem(XMM0, RBP, -8);
+    // absolute value: clear the sign bit
+    asm.movq_r64_xmm(RAX, XMM0);
+    asm.shl_imm(RAX, 1);
+    asm.shr_imm(RAX, 1);
+    asm.movq_xmm_r64(XMM0, RAX);
+    asm.movsd_mem_xmm(RBP, -8, XMM0);
+
+    asm.bind(f_pos);
+    asm.cvttsd2si(RAX, XMM0);
+    asm.store(RBP, -16, RAX); // integer part
+    asm.cvtsi2sd(XMM1, RAX);
+    asm.subsd(XMM0, XMM1); // fractional part 0..1
+    asm.mov_imm64(RAX, 1_000_000);
+    asm.cvtsi2sd(XMM2, RAX);
+    asm.mulsd(XMM0, XMM2);
+    asm.cvttsd2si(RAX, XMM0);
+    asm.store(RBP, -24, RAX); // fractional digits, 0..999999
+
+    asm.load(RCX, RBP, -16);
+    asm.call_rel(pi);
+
+    // '.' between integer and fractional parts
+    asm.mov_imm64(RCX, b'.' as i64);
+    asm.store_rip8(RCX, Fixup::Data(D_CHARBUF));
+    asm.lea_rip(RCX, Fixup::Data(D_CHARBUF));
+    asm.mov_imm64(RDX, 1);
+    asm.call_rel(w);
+
+    // six digits, leading zeros preserved
+    asm.mov_imm64(RAX, 100_000);
+    asm.store(RBP, -32, RAX); // divisor
+    asm.mov_imm64(RAX, 6);
+    asm.store(RBP, -40, RAX); // counter
+
+    let d_loop = asm.label();
+    asm.bind(d_loop);
+    asm.load(R8, RBP, -24); // remaining fraction
+    asm.load(R9, RBP, -32); // divisor
+    asm.mov_rr(RAX, R8);
+    asm.mov_imm64(RDX, 0);
+    asm.div_r(R9);
+    asm.store(RBP, -24, RDX); // remainder
+    asm.add_imm32(RAX, b'0' as i32);
+    asm.store_rip8(RAX, Fixup::Data(D_CHARBUF));
+
+    asm.lea_rip(RCX, Fixup::Data(D_CHARBUF));
+    asm.mov_imm64(RDX, 1);
+    asm.call_rel(w);
+
+    // divisor /= 10
+    asm.load(RAX, RBP, -32);
+    asm.mov_imm64(RCX, 10);
+    asm.mov_imm64(RDX, 0);
+    asm.div_r(RCX);
+    asm.store(RBP, -32, RAX);
+    asm.load(RAX, RBP, -40);
+    asm.dec_r(RAX);
+    asm.store(RBP, -40, RAX);
+    asm.test_rr(RAX, RAX);
+    asm.jcc(CC_NE, d_loop);
+    asm.leave();
+    asm.ret();
+
+    // ---- NaN and +-Inf blocks ----
+    let nan_pos = asm.label();
+    asm.bind(f_nan);
+    asm.movq_r64_xmm(RAX, XMM0);
+    asm.test_rr(RAX, RAX);
+    asm.jcc(CC_NS, nan_pos);
+    asm.mov_imm64(RCX, b'-' as i64);
+    asm.store_rip8(RCX, Fixup::Data(D_CHARBUF));
+    asm.lea_rip(RCX, Fixup::Data(D_CHARBUF));
+    asm.mov_imm64(RDX, 1);
+    asm.call_rel(w);
+    asm.movsd_xmm_mem(XMM0, RBP, -8);
+    asm.bind(nan_pos);
+    asm.mov_imm64(RAX, (b'n' as i64) | ((b'a' as i64) << 8) | ((b'n' as i64) << 16));
+    asm.store(RBP, -48, RAX);
+    asm.lea(RCX, RBP, -48);
+    asm.mov_imm64(RDX, 3);
+    asm.call_rel(w);
+    asm.leave();
+    asm.ret();
+
+    let inf_pos = asm.label();
+    asm.bind(f_inf);
+    asm.movq_r64_xmm(RAX, XMM0);
+    asm.test_rr(RAX, RAX);
+    asm.jcc(CC_NS, inf_pos);
+    asm.mov_imm64(RCX, b'-' as i64);
+    asm.store_rip8(RCX, Fixup::Data(D_CHARBUF));
+    asm.lea_rip(RCX, Fixup::Data(D_CHARBUF));
+    asm.mov_imm64(RDX, 1);
+    asm.call_rel(w);
+    asm.bind(inf_pos);
+    asm.mov_imm64(RAX, (b'i' as i64) | ((b'n' as i64) << 8) | ((b'f' as i64) << 16));
+    asm.store(RBP, -48, RAX);
+    asm.lea(RCX, RBP, -48);
+    asm.mov_imm64(RDX, 3);
+    asm.call_rel(w);
+    asm.leave();
+    asm.ret();
+
     // ---------------- bs_malloc(rcx = size) -> rax ----------------
     l.insert("bs_malloc".into(), ma);
     asm.bind(ma);

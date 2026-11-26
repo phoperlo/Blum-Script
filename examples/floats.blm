@@ -1,0 +1,107 @@
+﻿// floats.blm — вещественные числа (double) на SSE2.
+// Печать: 6 знаков после точки, nan / inf обрабатываются отдельно.
+
+struct Point {
+    x: float;
+    y: float;
+}
+
+var gravity: float = 9.81;
+
+// 5 float-параметров: 4 идут в XMM0..XMM3, пятый — через стек.
+func weighted(a: float, b: float, c: float, d: float, e: float) -> float {
+    return a + b * 2.0 + c * 3.0 + d * 4.0 + e * 5.0;
+}
+
+// int-параметры и float-параметры нумеруются раздельно.
+func mixed(a: int, b: float, c: int, d: float) -> float {
+    return to_float(a + c) * b + d;
+}
+
+func average(a: float, b: float) -> float {
+    return (a + b) / 2.0;
+}
+
+func norm2(p: *Point) -> float {
+    return p->x * p->x + p->y * p->y;
+}
+
+func scale(p: *Point, k: float) -> void {
+    p->x = p->x * k;
+    p->y = p->y * k;
+}
+
+func main() -> int {
+    var x: float = 1.5;
+    var y: float = 2.25;
+
+    print("x = ", x, " y = ", y);
+    print("x+y = ", x + y, " x-y = ", x - y);
+    print("x*y = ", x * y, " x/y = ", x / y);
+    print("-x = ", -x, "  literal = ", -0.75);
+
+    print("average = ", average(x, y));
+    print("weighted(1..5) = ", weighted(1.0, 1.0, 1.0, 1.0, 1.0));
+    print("mixed = ", mixed(1, 0.5, 2, 0.25));
+
+    // сравнения и логика дают bool
+    print("cmp: ", x < y, " ", x == 1.5, " ", y > 100.0);
+    if (x < y) {
+        print("x is smaller");
+    }
+
+    // преобразования
+    var i: int = 7;
+    print("to_float(7) = ", to_float(i), " to_int(3.75) = ", to_int(x + y));
+    print("cast<float>(3) = ", cast<float>(3), " cast<int>(9.99) = ", cast<int>(9.99));
+
+    // неявные преобразования в объявлении и присваивании
+    var t: int = 5.5;    // 5
+    var u: float = 5;    // 5.0
+    t = 9.99;
+    u = 9;
+    print("coerced: ", t, " ", u);
+
+    // структуры с полями float
+    var p: Point;
+    p.x = 1.5;
+    p.y = 0.0 - 2.5;
+    print("p = (", p.x, ", ", p.y, ")  norm2 = ", norm2(&p));
+    scale(&p, 2.0);
+    print("scaled p = (", p.x, ", ", p.y, ")");
+    print("sizeof(Point) = ", sizeof(Point), " sizeof(float) = ", sizeof(float));
+
+    // массивы, указатели
+    var a: float[4];
+    var k: int = 0;
+    while (k < 4) {
+        a[k] = to_float(k) * 1.25;
+        k = k + 1;
+    }
+    var sum: float = 0.0;
+    k = 0;
+    while (k < 4) {
+        sum = sum + a[k];
+        k = k + 1;
+    }
+    print("array sum = ", sum);
+
+    var q: *float = &a[0];
+    *q = 100.5;
+    print("a[0] via pointer = ", a[0]);
+
+    // глобальные float
+    gravity = gravity * 1.0;
+    print("gravity = ", gravity);
+
+    // особые значения
+    var zero: float = 0.0;
+    var nan: float = zero / zero;
+    var inf: float = 1.0 / zero;
+    print("nan = ", nan, "  inf = ", inf, "  -inf = ", 0.0 - inf);
+    if (!zero) {
+        print("0.0 is falsy");
+    }
+
+    return 0;
+}

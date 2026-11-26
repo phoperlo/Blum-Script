@@ -53,9 +53,10 @@ blumsc hex    <file.blm>
 - `struct` с доступом `.` и `->`, вложенные структуры, выравнивание полей
 - указатели `*T`, `&`, `*`, арифметика указателей, индексация `[]`
 - `malloc` / `free` (через `HeapAlloc` / `HeapFree`), `sizeof`, `cast<T>(...)`
-- встроенные `print`, `len`, `strlen`, `to_int`
+- встроенные `print`, `len`, `strlen`, `to_int`, `to_float`
 - консольный ввод: `read_str()`, `read_int()`, `read_char()`
 - файлы: `open`, `read`, `write`, `file_size`, `close`
+- вещественные числа `float` (IEEE-754 double) на SSE2: арифметика, сравнения, `XMM0..3` в ABI, печать 6 знаков, `nan`/`inf`
 - `import "file.blm"` с рекурсивным раскрытием
 - `asm { ... }` — raw-байты машинного кода прямо в `.text`
 - собственный рантайм на машинном коде: печать чисел/строк/символов/bool, `strlen`, heap
@@ -70,6 +71,7 @@ blumsc hex    <file.blm>
 - `imports.blm` — импорт модуля, рекурсия, raw-вставка машинного кода;
 - `elseif.blm` — цепочка `else if`;
 - `io.blm` — консольный ввод и работа с файлами;
+- `floats.blm` — вещественные числа: арифметика, структуры, массивы, преобразования, `nan`/`inf`;
 - `features.blm` — вложенные структуры, массивы, `malloc`, `sizeof`;
 - `utils.blm` — модуль с функциями.
 
@@ -77,6 +79,7 @@ blumsc hex    <file.blm>
 blumsc run .\examples\hello.blm
 blumsc run .\examples\lowlevel.blm
 blumsc run .\examples\imports.blm
+blumsc run .\examples\floats.blm
 ```
 
 ## Документация
