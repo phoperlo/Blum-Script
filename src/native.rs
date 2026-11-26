@@ -32,9 +32,9 @@ pub enum AbiSlot {
     Stack(usize),
 }
 
-pub fn abi_assign(tys: &[Type]) -> Vec<AbiSlot> {
+pub fn abi_assign(tys: &[Type], gpr_start: usize) -> Vec<AbiSlot> {
     let mut out = Vec::with_capacity(tys.len());
-    let mut ik = 0usize;
+    let mut ik = gpr_start;
     let mut fk = 0usize;
     let mut sk = 0usize;
     for t in tys {
@@ -86,6 +86,7 @@ pub struct Native {
     breaks: Vec<u32>,
     continues: Vec<u32>,
     cur_ret: Type,
+    cur_ret_ptr: Option<usize>,
     entry: u32,
 }
 
@@ -109,6 +110,7 @@ pub fn compile(program: &[Stmt]) -> Result<Output, String> {
         breaks: Vec::new(),
         continues: Vec::new(),
         cur_ret: Type::Void,
+        cur_ret_ptr: None,
         entry: 0,
     };
 
@@ -326,14 +328,54 @@ impl Native {
         self.frame
     }
 
+    fn is_aggregate(&self, t: &Type) -> bool {
+        matches!(t, Type::Named(_) | Type::Array(_, _))
+    }
+
+    fn store_reg_slot(&mut self, d: i32, sz: usize, reg: u8) -> Result<(), String> {
+        match sz {
+            1 => self.asm.store8(RBP, d, reg),
+            2 => self.asm.store16(RBP, d, reg),
+            4 => self.asm.store32(RBP, d, reg),
+            8 => self.asm.store(RBP, d, reg),
+            n => {
+                return Err(format!(
+                    "cannot pass a {}-byte aggregate in a register",
+                    n
+                ))
+            }
+        }
+        Ok(())
+    }
+
+    /// Copy `sz` bytes from `[RSI]` into the frame slot that starts at `-off`.
+    fn copy_to_slot(&mut self, off: usize, sz: usize) -> Result<(), String> {
+        self.asm.lea(RDI, RBP, -(off as i32));
+        self.asm.mov_imm64(RCX, sz as i64);
+        self.asm.rep_movsb();
+        Ok(())
+    }
+
+    /// Copy `sz` bytes from the address in `RAX` into the frame slot `-off`.
+    fn copy_addr_to_slot(&mut self, off: usize, sz: usize) -> Result<(), String> {
+        self.asm.mov_rr(RSI, RAX);
+        self.copy_to_slot(off, sz)
+    }
+
     fn store_slot(&mut self, off: usize, t: &Type) -> Result<(), String> {
         let d = -(off as i32);
         if matches!(t, Type::Float) {
             self.asm.movsd_mem_xmm(RBP, d, XMM0);
             return Ok(());
         }
-        match self.size_of(t)? {
+        let sz = self.size_of(t)?;
+        if self.is_aggregate(t) && sz > 8 {
+            return self.copy_addr_to_slot(off, sz);
+        }
+        match sz {
             1 => self.asm.store8(RBP, d, RAX),
+            2 => self.asm.store16(RBP, d, RAX),
+            4 => self.asm.store32(RBP, d, RAX),
             8 => self.asm.store(RBP, d, RAX),
             n => return Err(format!("cannot store a {}-byte aggregate in a variable", n)),
         }
@@ -346,8 +388,28 @@ impl Native {
             self.asm.movsd_mem_xmm_rip(fix, XMM0);
             return Ok(());
         }
-        match self.size_of(t)? {
+        let sz = self.size_of(t)?;
+        if self.is_aggregate(t) && sz > 8 {
+            self.asm.mov_rr(RSI, RAX);
+            self.asm.lea_rip(RDI, Fixup::Data(off));
+            self.asm.mov_imm64(RCX, sz as i64);
+            self.asm.rep_movsb();
+            return Ok(());
+        }
+        match sz {
             1 => self.asm.store_rip8(RAX, Fixup::Data(off)),
+            2 => {
+                self.asm.push_r(RAX);
+                self.asm.lea_rip(RDI, Fixup::Data(off));
+                self.asm.pop_r(RAX);
+                self.asm.store16(RDI, 0, RAX)
+            }
+            4 => {
+                self.asm.push_r(RAX);
+                self.asm.lea_rip(RDI, Fixup::Data(off));
+                self.asm.pop_r(RAX);
+                self.asm.store32(RDI, 0, RAX)
+            }
             8 => self.asm.store_rip(RAX, Fixup::Data(off)),
             n => return Err(format!("cannot store a {}-byte aggregate in a global", n)),
         }
@@ -400,12 +462,6 @@ impl Native {
     // ---------------- function prologue / epilogue ----------------
 
     fn emit_fn(&mut self, f: &FuncDecl) -> Result<(), String> {
-        if self.size_of(&f.ret)? > 8 {
-            return Err(format!(
-                "function '{}' returns an aggregate; return a pointer instead",
-                f.name
-            ));
-        }
         let lbl = *self.fn_labels.get(&f.name).unwrap();
         self.asm.bind(lbl);
         self.asm.push_r(RBP);
@@ -416,28 +472,45 @@ impl Native {
         self.max_frame = 0;
         self.depth = 0;
         self.cur_ret = f.ret.clone();
+        self.cur_ret_ptr = None;
         self.scopes.clear();
         self.breaks.clear();
         self.continues.clear();
         self.scopes.push(Vec::new());
 
+        // A return value larger than 8 bytes comes back through a hidden
+        // pointer in RCX, so integer arguments start at RDX.
+        let ref_ret = self.is_aggregate(&f.ret) && self.size_of(&f.ret)? > 8;
+        let gpr_start = if ref_ret { 1 } else { 0 };
+        if ref_ret {
+            let off = self.alloc(8);
+            self.cur_ret_ptr = Some(off);
+            self.asm.store(RBP, -(off as i32), RCX);
+        }
+
         let ptypes: Vec<Type> = f.params.iter().map(|(_, t)| t.clone()).collect();
-        let slots = abi_assign(&ptypes);
+        let slots = abi_assign(&ptypes, gpr_start);
         let regs = [RCX, RDX, R8, R9];
         let xmms = [XMM0, XMM1, XMM2, XMM3];
         for ((name, ty), slot) in f.params.iter().zip(slots.iter()) {
             let sz = self.size_of(ty)?;
-            if sz > 8 {
-                return Err(format!(
-                    "parameter '{}' of '{}' is an aggregate; pass a pointer instead",
-                    name, f.name
-                ));
-            }
-            let off = self.alloc(sz);
+            let agg = self.is_aggregate(ty);
+            let off = self.alloc(sz.max(1));
             let d = -(off as i32);
             let is_f = matches!(ty, Type::Float);
+            // Aggregate larger than 8 bytes arrives as a pointer to a copy
+            // made by the caller; the callee copies it into its own frame so
+            // mutations stay local (value semantics).
+            let by_ref = agg && sz > 8;
             match slot {
-                AbiSlot::Gpr(i) => self.asm.store(RBP, d, regs[*i]),
+                AbiSlot::Gpr(i) => {
+                    if by_ref {
+                        self.asm.mov_rr(RSI, regs[*i]);
+                        self.copy_to_slot(off, sz)?;
+                    } else {
+                        self.store_reg_slot(d, sz, regs[*i])?;
+                    }
+                }
                 AbiSlot::Xmm(i) => self.asm.movsd_mem_xmm(RBP, d, xmms[*i]),
                 AbiSlot::Stack(k) => {
                     // [rbp+8] return address, [rbp+16..48) shadow space,
@@ -446,9 +519,12 @@ impl Native {
                     if is_f {
                         self.asm.movsd_xmm_mem(XMM0, RBP, src);
                         self.asm.movsd_mem_xmm(RBP, d, XMM0);
+                    } else if by_ref {
+                        self.asm.load(RSI, RBP, src);
+                        self.copy_to_slot(off, sz)?;
                     } else {
                         self.asm.load(RAX, RBP, src);
-                        self.asm.store(RBP, d, RAX);
+                        self.store_reg_slot(d, sz, RAX)?;
                     }
                 }
             }
@@ -497,6 +573,12 @@ impl Native {
                         .get(name)
                         .cloned()
                         .ok_or_else(|| format!("internal: missing global '{}'", name))?;
+                    // `.data` already starts zeroed; an aggregate declared as
+                    // `= 0` needs no copy (and must not dereference 0).
+                    let sz = self.size_of(&t)?;
+                    if self.is_aggregate(&t) && sz > 8 && matches!(init, Expr::Int(0)) {
+                        continue;
+                    }
                     self.expr(init)?;
                     self.store_global(off, &t)?;
                 }
@@ -542,15 +624,15 @@ impl Native {
                     None => self.type_of(init)?,
                 };
                 let sz = self.size_of(&t)?;
-                let off = self.alloc(sz);
+                let off = self.alloc(sz.max(1));
                 if sz > 8 {
-                    if !matches!(init, Expr::Int(0)) {
-                        return Err(format!(
-                            "aggregate initializer for '{}' is not supported; use a pointer",
-                            name
-                        ));
+                    if matches!(init, Expr::Int(0)) {
+                        self.zero_slot(off, sz)?;
+                    } else {
+                        let vt = self.expr(init)?;
+                        self.coerce_to(&vt, &t)?;
+                        self.store_slot(off, &t)?;
                     }
-                    self.zero_slot(off, sz)?;
                 } else {
                     let vt = self.expr(init)?;
                     self.coerce_to(&vt, &t)?;
@@ -603,11 +685,26 @@ impl Native {
             }
             Stmt::For(init, cond, update, body) => self.for_loop(init, cond, update, body),
             Stmt::Return(v) => {
+                let rt = self.cur_ret.clone();
+                let rsz = self.size_of(&rt)?;
+                let by_ref = self.is_aggregate(&rt) && rsz > 8;
                 match v {
                     Some(e) => {
                         let vt = self.expr(e)?;
-                        let rt = self.cur_ret.clone();
-                        self.coerce_to(&vt, &rt)?;
+                        if by_ref {
+                            // RAX holds the source address; copy into the
+                            // caller-provided buffer and return that pointer.
+                            let off = self
+                                .cur_ret_ptr
+                                .ok_or_else(|| "internal: missing return buffer".to_string())?;
+                            self.asm.mov_rr(RSI, RAX);
+                            self.asm.load(RDI, RBP, -(off as i32));
+                            self.asm.mov_imm64(RCX, rsz as i64);
+                            self.asm.rep_movsb();
+                            self.asm.load(RAX, RBP, -(off as i32));
+                        } else {
+                            self.coerce_to(&vt, &rt)?;
+                        }
                     }
                     None => self.asm.mov_imm64(RAX, 0),
                 }
@@ -810,6 +907,8 @@ impl Native {
                     } else {
                         match self.size_of(&t)? {
                             1 => self.asm.load8zx(RAX, RBP, d),
+                            2 => self.asm.load16zx(RAX, RBP, d),
+                            4 => self.asm.load32(RAX, RBP, d),
                             n if n > 8 => self.asm.lea(RAX, RBP, d),
                             _ => self.asm.load(RAX, RBP, d),
                         }
@@ -1231,6 +1330,8 @@ impl Native {
         }
         match self.size_of(t)? {
             1 => self.asm.load8zx(RAX, RAX, 0),
+            2 => self.asm.load16zx(RAX, RAX, 0),
+            4 => self.asm.load32(RAX, RAX, 0),
             8 => self.asm.load(RAX, RAX, 0),
             _ => {}
         }
@@ -1555,14 +1656,28 @@ impl Native {
         // matches the callee even when an argument is an int literal for a
         // float slot (or vice versa).
         let tys: Vec<Type> = f.params.iter().map(|(_, pt)| pt.clone()).collect();
-        let slots = abi_assign(&tys);
         let n = args.len();
+        let ret_sz = self.size_of(&f.ret)?;
+        let ref_ret = self.is_aggregate(&f.ret) && ret_sz > 8;
+        let ret_tmp = if ref_ret { Some(self.alloc(ret_sz)) } else { None };
+        let slots = abi_assign(&tys, if ref_ret { 1 } else { 0 });
         let nstack = slots
             .iter()
             .filter(|s| matches!(s, AbiSlot::Stack(_)))
             .count();
 
-        let staging = (n * 8) as u32;
+        // Aggregates larger than 8 bytes are passed by reference: the caller
+        // copies the value into the staging area and passes its address.
+        let mut data_off = vec![0i32; n];
+        let mut cursor = (n * 8) as i32;
+        for (i, t) in tys.iter().enumerate() {
+            let sz = self.size_of(t)?;
+            if self.is_aggregate(t) && sz > 8 {
+                data_off[i] = cursor;
+                cursor += (((sz + 7) / 8) * 8) as i32;
+            }
+        }
+        let staging = cursor as u32;
         let outgoing = 32 + (nstack as u32) * 8;
         let pad = {
             let total = self.depth as u32 + staging + outgoing;
@@ -1588,6 +1703,15 @@ impl Native {
             if matches!(t, Type::Float) {
                 self.to_xmm0(a)?;
                 self.asm.movsd_mem_xmm(RSP, at, XMM0);
+            } else if self.is_aggregate(t) && self.size_of(t)? > 8 {
+                self.expr(a)?;
+                let doff = data_off[i];
+                self.asm.mov_rr(RSI, RAX);
+                self.asm.lea(RDI, RSP, doff);
+                self.asm.mov_imm64(RCX, self.size_of(t)? as i64);
+                self.asm.rep_movsb();
+                self.asm.lea(RAX, RSP, doff);
+                self.asm.store(RSP, at, RAX);
             } else {
                 let vt = self.expr(a)?;
                 self.coerce_to(&vt, t)?;
@@ -1595,11 +1719,7 @@ impl Native {
             }
         }
 
-        if outgoing != 32 {
-            self.asm.sub_rsp(outgoing);
-        } else {
-            self.asm.sub_rsp(32);
-        }
+        self.asm.sub_rsp(outgoing);
         self.depth += outgoing as usize;
 
         let base = outgoing as i32; // staging offset relative to current rsp
@@ -1622,11 +1742,18 @@ impl Native {
                 AbiSlot::Stack(_) => {}
             }
         }
+        if let Some(off) = ret_tmp {
+            self.asm.lea(RCX, RBP, -(off as i32));
+        }
 
         self.asm.call_rel(lbl);
         let cleanup = outgoing + staging + pad;
         self.asm.add_rsp(cleanup);
         self.depth -= cleanup as usize;
+
+        if let Some(off) = ret_tmp {
+            self.asm.lea(RAX, RBP, -(off as i32));
+        }
 
         Ok(f.ret)
     }

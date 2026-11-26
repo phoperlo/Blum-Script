@@ -229,6 +229,29 @@ impl Asm {
         self.mem(&[0x0F, 0xB6], true, dst, base, disp);
     }
 
+    pub fn load16zx(&mut self, dst: u8, base: u8, disp: i32) {
+        self.mem(&[0x0F, 0xB7], true, dst, base, disp);
+    }
+
+    /// `mov r32, [base+disp]` (zero-extends into the full register)
+    pub fn load32(&mut self, dst: u8, base: u8, disp: i32) {
+        self.mem(&[0x8B], false, dst, base, disp);
+    }
+
+    pub fn store16(&mut self, base: u8, disp: i32, src: u8) {
+        self.code.push(0x66);
+        self.mem(&[0x89], false, src, base, disp);
+    }
+
+    pub fn store32(&mut self, base: u8, disp: i32, src: u8) {
+        self.mem(&[0x89], false, src, base, disp);
+    }
+
+    /// `rep movsb` — copies RCX bytes from [RSI] to [RDI].
+    pub fn rep_movsb(&mut self) {
+        self.code.extend_from_slice(&[0xF3, 0xA4]);
+    }
+
     pub fn lea(&mut self, dst: u8, base: u8, disp: i32) {
         self.mem(&[0x8D], true, dst, base, disp);
     }

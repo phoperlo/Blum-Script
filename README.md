@@ -51,6 +51,7 @@ blumsc hex    <file.blm>
 - `func` с типизированными параметрами и `-> тип`
 - `if` / `else` / `else if`, `while`, трёхчастный `for`, `break`, `continue`, `return`
 - `struct` с доступом `.` и `->`, вложенные структуры, выравнивание полей
+- структуры и массивы по значению: аргументы, возврат, копирование (ABI-классификатор, скрытый указатель возврата)
 - указатели `*T`, `&`, `*`, арифметика указателей, индексация `[]`
 - `malloc` / `free` (через `HeapAlloc` / `HeapFree`), `sizeof`, `cast<T>(...)`
 - встроенные `print`, `len`, `strlen`, `to_int`, `to_float`
@@ -72,6 +73,7 @@ blumsc hex    <file.blm>
 - `elseif.blm` — цепочка `else if`;
 - `io.blm` — консольный ввод и работа с файлами;
 - `floats.blm` — вещественные числа: арифметика, структуры, массивы, преобразования, `nan`/`inf`;
+- `structs_by_value.blm` — структуры и массивы по значению: аргументы, возврат, копирование, рекурсия;
 - `features.blm` — вложенные структуры, массивы, `malloc`, `sizeof`;
 - `utils.blm` — модуль с функциями.
 
@@ -80,6 +82,7 @@ blumsc run .\examples\hello.blm
 blumsc run .\examples\lowlevel.blm
 blumsc run .\examples\imports.blm
 blumsc run .\examples\floats.blm
+blumsc run .\examples\structs_by_value.blm
 ```
 
 ## Документация
