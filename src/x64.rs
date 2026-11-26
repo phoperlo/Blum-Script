@@ -352,6 +352,20 @@ impl Asm {
         self.code.push(v);
     }
 
+    pub fn cmp_imm32(&mut self, r: u8, v: i32) {
+        if v >= i8::MIN as i32 && v <= i8::MAX as i32 {
+            self.rex(true, 0, r);
+            self.code.push(0x83);
+            self.code.push(0xF8 | (r & 7));
+            self.code.push(v as u8);
+        } else {
+            self.rex(true, 0, r);
+            self.code.push(0x81);
+            self.code.push(0xF8 | (r & 7));
+            self.code.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+
     pub fn shl_cl(&mut self, r: u8) {
         self.rr(&[0xD3], true, 4, r);
     }

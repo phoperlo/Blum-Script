@@ -443,6 +443,43 @@ free(buf);
 | `free(ptr)` | `(ptr) -> void` | `HeapFree(GetProcessHeap(), 0, ptr)` — безопасен для `null` |
 | `to_int(x)` | `(любое) -> int` | Значение уже 64-битное, преобразование семантическое |
 | `to_float(x)` | — | В 1.0.0 не поддерживается (ошибка компиляции) |
+| `read_str()` | `() -> string` | Читает строку с консоли (до `\n`), возвращает свежую копию в heap |
+| `read_int()` | `() -> int` | Читает строку и разбирает знак и цифры; `0`, если цифр нет |
+| `read_char()` | `() -> char` | Читает строку, возвращает первый символ |
+| `open(path, mode)` | `(string, int) -> *void` | `CreateFileA`: `0` — чтение, `1` — запись (создать/усечь), `2` — чтение+запись (открыть/создать) |
+| `read(h, buf, len)` | `(*void, *byte, int) -> int` | `ReadFile`, возвращает число прочитанных байт |
+| `write(h, buf, len)` | `(*void, *byte, int) -> int` | `WriteFile`, возвращает число записанных байт |
+| `file_size(h)` | `(*void) -> int` | `GetFileSizeEx` |
+| `close(h)` | `(*void) -> void` | `CloseHandle` |
+
+### Ввод с консоли и файлы
+
+```blumscript
+func main() -> int {
+    print("name:");
+    var name: string = read_str();
+
+    print("age:");
+    var age: int = read_int();
+    print(name, " is ", age);
+
+    var h: *void = open("notes.txt", 1);
+    write(h, "hello file\n", 11);
+    close(h);
+
+    var r: *void = open("notes.txt", 0);
+    print("size = ", file_size(r));
+    var buf: *byte = cast<*byte>(malloc(64));
+    var n: int = read(r, buf, 63);
+    buf[n] = 0;
+    close(r);
+    print(cast<string>(buf));
+    free(buf);
+    return 0;
+}
+```
+
+`read_str` не разделяет общий буфер между вызовами: каждая строка — отдельный `HeapAlloc`, освобождать через `free`. `read`/`write` работают с любыми буферами (`*byte`, `malloc`, адрес массива через `cast<*byte>(&a[0])`).
 
 Печать выбирается по **статическому типу** аргумента на этапе компиляции, никакого varargs нет:
 
@@ -537,6 +574,7 @@ import "utils.blm";
 - Структуры нельзя передавать и возвращать по значению — только через указатель.
 - Агрегаты нельзя инициализировать значением: `var a: int[5];` создаётся и обнуляется, заполнение — поэлементное.
 - `asm { }` — это raw-байты, а не текст ассемблера: мнемоники вида `mov rax, 42` не разбираются, нужны байты.
+- Строки, прочитанные `read_str()`, не освобождаются автоматически — вызывайте `free()`.
 
 ### Дорожная карта
 - Проверка неизменяемости `let`.

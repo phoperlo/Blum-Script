@@ -1,0 +1,4 @@
+# Static CRT: the compiler binary must not require VCRUNTIME140.dll.
+# Generated .exe files never touch the CRT at all (only kernel32.dll).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

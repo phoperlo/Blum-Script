@@ -256,6 +256,12 @@ impl Native {
             "free" => Ok(Type::Void),
             "to_int" => Ok(Type::Int),
             "to_float" => Ok(Type::Float),
+            "read_str" => Ok(Type::String),
+            "read_int" => Ok(Type::Int),
+            "read_char" => Ok(Type::Char),
+            "open" => Ok(Type::Ptr(Box::new(Type::Void))),
+            "read" | "write" | "file_size" => Ok(Type::Int),
+            "close" => Ok(Type::Void),
             _ => {
                 let f = self
                     .fns
@@ -1198,8 +1204,88 @@ impl Native {
                 Ok(Type::Int)
             }
             "to_float" => Err("to_float() is not supported by the native backend".into()),
+            "read_str" => {
+                if !args.is_empty() {
+                    return Err("read_str() takes no arguments".into());
+                }
+                self.call_rt("bs_read_alloc")?;
+                Ok(Type::String)
+            }
+            "read_int" => {
+                if !args.is_empty() {
+                    return Err("read_int() takes no arguments".into());
+                }
+                self.call_rt("bs_read_int")?;
+                Ok(Type::Int)
+            }
+            "read_char" => {
+                if !args.is_empty() {
+                    return Err("read_char() takes no arguments".into());
+                }
+                self.asm.lea_rip(RCX, Fixup::Data(D_INBUF));
+                self.asm.mov_imm64(RDX, 2);
+                self.call_rt("bs_read")?;
+                self.asm.load8zx_rip(RAX, Fixup::Data(D_INBUF));
+                Ok(Type::Char)
+            }
+            "open" => {
+                self.expect_nargs(name, args, 2)?;
+                self.args_to_regs(args, &[RCX, RDX])?;
+                self.call_rt("bs_open")?;
+                Ok(Type::Ptr(Box::new(Type::Void)))
+            }
+            "read" => {
+                self.expect_nargs(name, args, 3)?;
+                self.args_to_regs(args, &[RCX, RDX, R8])?;
+                self.call_rt("bs_file_read")?;
+                Ok(Type::Int)
+            }
+            "write" => {
+                self.expect_nargs(name, args, 3)?;
+                self.args_to_regs(args, &[RCX, RDX, R8])?;
+                self.call_rt("bs_file_write")?;
+                Ok(Type::Int)
+            }
+            "close" => {
+                self.expect_nargs(name, args, 1)?;
+                self.args_to_regs(args, &[RCX])?;
+                self.call_rt("bs_close")?;
+                Ok(Type::Void)
+            }
+            "file_size" => {
+                self.expect_nargs(name, args, 1)?;
+                self.args_to_regs(args, &[RCX])?;
+                self.call_rt("bs_file_size")?;
+                Ok(Type::Int)
+            }
             _ => self.call_user(name, args),
         }
+    }
+
+    fn expect_nargs(&self, name: &str, args: &[Expr], n: usize) -> Result<(), String> {
+        if args.len() != n {
+            return Err(format!(
+                "{}() expects {} argument(s), got {}",
+                name,
+                n,
+                args.len()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Evaluate `args` left-to-right, then load them into `regs`.
+    fn args_to_regs(&mut self, args: &[Expr], regs: &[u8]) -> Result<(), String> {
+        for a in args.iter().rev() {
+            self.expr(a)?;
+            self.asm.push_r(RAX);
+            self.depth += 8;
+        }
+        for r in regs {
+            self.asm.pop_r(*r);
+            self.depth -= 8;
+        }
+        Ok(())
     }
 
     fn call_user(&mut self, name: &str, args: &[Expr]) -> Result<Type, String> {

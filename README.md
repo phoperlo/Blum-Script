@@ -54,6 +54,8 @@ blumsc hex    <file.blm>
 - указатели `*T`, `&`, `*`, арифметика указателей, индексация `[]`
 - `malloc` / `free` (через `HeapAlloc` / `HeapFree`), `sizeof`, `cast<T>(...)`
 - встроенные `print`, `len`, `strlen`, `to_int`
+- консольный ввод: `read_str()`, `read_int()`, `read_char()`
+- файлы: `open`, `read`, `write`, `file_size`, `close`
 - `import "file.blm"` с рекурсивным раскрытием
 - `asm { ... }` — raw-байты машинного кода прямо в `.text`
 - собственный рантайм на машинном коде: печать чисел/строк/символов/bool, `strlen`, heap
@@ -67,6 +69,8 @@ blumsc hex    <file.blm>
 - `lowlevel.blm` — структуры, указатели, `malloc`, разыменование;
 - `imports.blm` — импорт модуля, рекурсия, raw-вставка машинного кода;
 - `elseif.blm` — цепочка `else if`;
+- `io.blm` — консольный ввод и работа с файлами;
+- `features.blm` — вложенные структуры, массивы, `malloc`, `sizeof`;
 - `utils.blm` — модуль с функциями.
 
 ```powershell

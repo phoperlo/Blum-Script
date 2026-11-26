@@ -1,0 +1,32 @@
+﻿func main() -> int {
+    print("enter name:");
+    var name: string = read_str();
+    print("hello, ", name);
+
+    print("enter a number:");
+    var n: int = read_int();
+    print("n*2 = ", n * 2, " n-1 = ", n - 1);
+
+    print("enter a char:");
+    var c: char = read_char();
+    print("char = ", c);
+
+    var path: string = "io_test.txt";
+    var h: *void = open(path, 1);
+    print("handle write = ", h);
+    var msg: string = "line one\nline two\n";
+    var w: int = write(h, msg, len(msg));
+    print("wrote ", w, " bytes");
+    close(h);
+
+    var h2: *void = open(path, 0);
+    print("size = ", file_size(h2));
+    var buf: *byte = cast<*byte>(malloc(64));
+    var r: int = read(h2, buf, 63);
+    buf[r] = 0;
+    close(h2);
+    print("read ", r, " bytes:");
+    print(cast<string>(buf));
+    free(buf);
+    return 0;
+}

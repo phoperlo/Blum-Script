@@ -15,6 +15,8 @@ pub type Labels = HashMap<String, u32>;
 /// `null_off` is the `.rdata` offset of the literal "null".
 pub fn emit(asm: &mut Asm, null_off: u32) -> Labels {
     let mut l = Labels::new();
+    // forward declaration: bs_read_alloc uses bs_malloc, defined later
+    let ma = asm.label();
 
     // ---------------- bs_write(rcx = ptr, rdx = len) ----------------
     let w = asm.label();
@@ -175,8 +177,257 @@ pub fn emit(asm: &mut Asm, null_off: u32) -> Labels {
     asm.leave();
     asm.ret();
 
+    // ---------------- bs_read(rcx = buf, rdx = maxlen) -> rax ----------------
+    // Reads one line from stdin byte-by-byte, stops at LF/EOF, drops CR,
+    // NUL-terminates the buffer and returns the length.
+    let rd = asm.label();
+    l.insert("bs_read".into(), rd);
+    asm.bind(rd);
+    asm.push_r(RBP);
+    asm.mov_rr(RBP, RSP);
+    asm.sub_rsp(96);
+    asm.store(RBP, -8, RCX); // buf
+    asm.store(RBP, -16, RDX); // maxlen
+    asm.mov_imm64(RAX, 0);
+    asm.store(RBP, -24, RAX); // len = 0
+    asm.mov_imm64(RCX, -10); // STD_INPUT_HANDLE
+    asm.call_iat(I_GETSTDHANDLE);
+    asm.store(RBP, -32, RAX); // h
+
+    let rloop = asm.label();
+    let rdrop = asm.label();
+    let rdone = asm.label();
+    asm.bind(rloop);
+    asm.load(R10, RBP, -24); // len
+    asm.load(R11, RBP, -16); // maxlen
+    asm.dec_r(R11);
+    asm.cmp_rr(R10, R11);
+    asm.jcc(CC_BE, rdrop); // len <= maxlen-1 -> continue reading
+    asm.jmp(rdone);
+
+    asm.bind(rdrop);
+    // ReadFile(h, &byte, 1, &nread, NULL)
+    asm.load(RCX, RBP, -32);
+    asm.lea(RDX, RBP, -48);
+    asm.mov_imm64(R8, 1);
+    asm.lea(R9, RBP, -56);
+    asm.store_imm32(RSP, 32, 0);
+    asm.store_imm32(RBP, -56, 0);
+    asm.call_iat(I_READFILE);
+    asm.load(R10, RBP, -56);
+    asm.test_rr(R10, R10);
+    asm.jcc(CC_E, rdone); // EOF
+
+    asm.load8zx(RCX, RBP, -48);
+    asm.cmp_imm8(RCX, b'\r');
+    asm.jcc(CC_E, rloop); // ignore CR
+    asm.cmp_imm8(RCX, b'\n');
+    asm.jcc(CC_E, rdone); // LF ends the line
+
+    asm.load(R10, RBP, -8); // buf
+    asm.load(RAX, RBP, -24); // len
+    asm.add_rr(R10, RAX);
+    asm.store8(R10, 0, RCX);
+    asm.inc_r(RAX);
+    asm.store(RBP, -24, RAX);
+    asm.jmp(rloop);
+
+    asm.bind(rdone);
+    asm.load(R10, RBP, -8);
+    asm.load(RAX, RBP, -24);
+    asm.add_rr(R10, RAX);
+    asm.xor_rr(RCX, RCX);
+    asm.store8(R10, 0, RCX);
+    asm.leave();
+    asm.ret();
+    // ---------------- bs_read_alloc() -> rax (heap string) ----------------
+    let rda = asm.label();
+    l.insert("bs_read_alloc".into(), rda);
+    asm.bind(rda);
+    asm.push_r(RBP);
+    asm.mov_rr(RBP, RSP);
+    asm.sub_rsp(64);
+    asm.lea_rip(RCX, Fixup::Data(D_INBUF));
+    asm.mov_imm64(RDX, (INBUF_LEN - 1) as i64);
+    asm.call_rel(rd);
+    asm.store(RBP, -8, RAX); // len
+    asm.mov_rr(RCX, RAX);
+    asm.inc_r(RCX);
+    asm.call_rel(ma); // -> rax = buffer
+    asm.store(RBP, -16, RAX);
+    asm.lea_rip(R8, Fixup::Data(D_INBUF)); // src
+    asm.mov_rr(R9, RAX); // dst
+    asm.load(RCX, RBP, -8); // count
+    let cpy = asm.label();
+    let cpy_done = asm.label();
+    asm.bind(cpy);
+    asm.test_rr(RCX, RCX);
+    asm.jcc(CC_E, cpy_done);
+    asm.load8zx(RDX, R8, 0);
+    asm.store8(R9, 0, RDX);
+    asm.inc_r(R8);
+    asm.inc_r(R9);
+    asm.dec_r(RCX);
+    asm.jmp(cpy);
+    asm.bind(cpy_done);
+    asm.xor_rr(RDX, RDX);
+    asm.store8(R9, 0, RDX);
+    asm.load(RAX, RBP, -16);
+    asm.leave();
+    asm.ret();
+
+    // ---------------- bs_read_int() -> rax ----------------
+    let ri = asm.label();
+    l.insert("bs_read_int".into(), ri);
+    asm.bind(ri);
+    asm.push_r(RBP);
+    asm.mov_rr(RBP, RSP);
+    asm.sub_rsp(64);
+    asm.lea(RCX, RBP, -48);
+    asm.mov_imm64(RDX, 31);
+    asm.call_rel(rd);
+    asm.lea(R8, RBP, -48); // cursor
+    asm.xor_rr(RAX, RAX); // accumulator
+    asm.xor_rr(R9, R9); // sign flag
+
+    let skip = asm.label();
+    let skip_adv = asm.label();
+    let chk_minus = asm.label();
+    let chk_plus = asm.label();
+    let digits = asm.label();
+    let d_end = asm.label();
+    let i_done = asm.label();
+
+    asm.bind(skip);
+    asm.load8zx(RCX, R8, 0);
+    asm.cmp_imm8(RCX, b' ');
+    asm.jcc(CC_E, skip_adv);
+    asm.cmp_imm8(RCX, b'\t');
+    asm.jcc(CC_NE, chk_minus);
+    asm.bind(skip_adv);
+    asm.inc_r(R8);
+    asm.jmp(skip);
+
+    asm.bind(chk_minus);
+    asm.cmp_imm8(RCX, b'-');
+    asm.jcc(CC_NE, chk_plus);
+    asm.mov_imm64(R9, 1);
+    asm.inc_r(R8);
+    asm.jmp(digits);
+
+    asm.bind(chk_plus);
+    asm.cmp_imm8(RCX, b'+');
+    asm.jcc(CC_NE, digits);
+    asm.inc_r(R8);
+
+    asm.bind(digits);
+    asm.load8zx(RCX, R8, 0);
+    asm.cmp_imm8(RCX, b'0');
+    asm.jcc(CC_B, d_end);
+    asm.cmp_imm8(RCX, b'9');
+    asm.jcc(CC_A, d_end);
+    asm.add_imm32(RCX, -(b'0' as i32));
+    asm.mov_imm64(RDX, 10);
+    asm.imul_rr(RAX, RDX);
+    asm.add_rr(RAX, RCX);
+    asm.inc_r(R8);
+    asm.jmp(digits);
+
+    asm.bind(d_end);
+    asm.test_rr(R9, R9);
+    asm.jcc(CC_E, i_done);
+    asm.neg_r(RAX);
+    asm.bind(i_done);
+    asm.leave();
+    asm.ret();
+
+    // ---------------- bs_open(rcx = path, rdx = mode) -> rax ----------------
+    // mode: 0 = read, 1 = write (truncate/create), 2 = read+write (open/create)
+    let op = asm.label();
+    l.insert("bs_open".into(), op);
+    asm.bind(op);
+    asm.push_r(RBP);
+    asm.mov_rr(RBP, RSP);
+    asm.sub_rsp(96);
+    let m_write = asm.label();
+    let m_rw = asm.label();
+    let op_go = asm.label();
+    asm.cmp_imm32(RDX, 0);
+    asm.jcc(CC_NE, m_write);
+    // mode 0 (read): fallthrough
+    asm.mov_imm64(RDX, 0x8000_0000i64); // GENERIC_READ
+    asm.mov_imm64(R10, 3); // OPEN_EXISTING
+    asm.jmp(op_go);
+    asm.bind(m_write);
+    asm.cmp_imm32(RDX, 1);
+    asm.jcc(CC_NE, m_rw);
+    asm.mov_imm64(RDX, 0x4000_0000i64); // GENERIC_WRITE
+    asm.mov_imm64(R10, 2); // CREATE_ALWAYS
+    asm.jmp(op_go);
+    asm.bind(m_rw);
+    asm.mov_imm64(RDX, 0xC000_0000i64); // GENERIC_READ|GENERIC_WRITE
+    asm.mov_imm64(R10, 4); // OPEN_ALWAYS
+    asm.bind(op_go);
+    asm.xor_rr(R8, R8); // dwShareMode = 0
+    asm.xor_rr(R9, R9); // lpSecurityAttributes = NULL
+    asm.store(RSP, 32, R10); // dwCreationDisposition
+    asm.store_imm32(RSP, 40, 0x80); // FILE_ATTRIBUTE_NORMAL
+    asm.store_imm32(RSP, 48, 0); // hTemplateFile = NULL
+    asm.call_iat(I_CREATEFILEA);
+    asm.leave();
+    asm.ret();
+
+    // ---------------- bs_file_read(rcx = h, rdx = buf, r8 = len) -> rax ----
+    let frd = asm.label();
+    l.insert("bs_file_read".into(), frd);
+    asm.bind(frd);
+    asm.push_r(RBP);
+    asm.mov_rr(RBP, RSP);
+    asm.sub_rsp(64);
+    asm.lea(R9, RBP, -32);
+    asm.store_imm32(RSP, 32, 0);
+    asm.call_iat(I_READFILE);
+    asm.load(RAX, RBP, -32);
+    asm.leave();
+    asm.ret();
+
+    // ---------------- bs_file_write(rcx = h, rdx = buf, r8 = len) -> rax ---
+    let fwr = asm.label();
+    l.insert("bs_file_write".into(), fwr);
+    asm.bind(fwr);
+    asm.push_r(RBP);
+    asm.mov_rr(RBP, RSP);
+    asm.sub_rsp(64);
+    asm.lea(R9, RBP, -32);
+    asm.store_imm32(RSP, 32, 0);
+    asm.call_iat(I_WRITEFILE);
+    asm.load(RAX, RBP, -32);
+    asm.leave();
+    asm.ret();
+
+    // ---------------- bs_close(rcx = h) ----------------
+    let cl = asm.label();
+    l.insert("bs_close".into(), cl);
+    asm.bind(cl);
+    asm.sub_rsp(40);
+    asm.call_iat(I_CLOSEHANDLE);
+    asm.add_rsp(40);
+    asm.ret();
+
+    // ---------------- bs_file_size(rcx = h) -> rax ----------------
+    let fsz = asm.label();
+    l.insert("bs_file_size".into(), fsz);
+    asm.bind(fsz);
+    asm.push_r(RBP);
+    asm.mov_rr(RBP, RSP);
+    asm.sub_rsp(48);
+    asm.lea(RDX, RBP, -16);
+    asm.call_iat(I_GETFILESIZEEX);
+    asm.load(RAX, RBP, -16);
+    asm.leave();
+    asm.ret();
+
     // ---------------- bs_malloc(rcx = size) -> rax ----------------
-    let ma = asm.label();
     l.insert("bs_malloc".into(), ma);
     asm.bind(ma);
     asm.sub_rsp(40);
