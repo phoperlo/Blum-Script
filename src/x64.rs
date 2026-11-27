@@ -528,7 +528,8 @@ impl Asm {
 
     /// `movq r64, xmm`
     pub fn movq_r64_xmm(&mut self, r: u8, xmm: u8) {
-        self.sse_rr(Some(0x66), true, r, xmm, &[0x0F, 0x7E]);
+        // 66 REX.W 0F 7E /r — reg holds the XMM source, r/m the GPR target.
+        self.sse_rr(Some(0x66), true, xmm, r, &[0x0F, 0x7E]);
     }
 
     pub fn xorpd(&mut self, dst: u8, src: u8) {

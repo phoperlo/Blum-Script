@@ -85,6 +85,9 @@ pub struct FuncDecl {
     pub name: String,
     pub params: Vec<(String, Type)>,
     pub ret: Type,
+    /// `func f(a: int, ...)` — extra arguments are passed by the C varargs
+    /// convention (positional slots, floats duplicated into the GP registers).
+    pub variadic: bool,
     pub body: Vec<Stmt>,
 }
 

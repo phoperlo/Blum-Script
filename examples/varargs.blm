@@ -1,0 +1,70 @@
+// varargs.blm — вариативные функции (`...`) и Windows x64 varargs ABI.
+//
+// Правила вызова:
+//   * слоты регистров позиционные: аргумент i -> RCX/RDX/R8/R9 и XMMi;
+//   * float-аргумент дублируется в целочисленный регистр того же слота
+//     (жёсткое требование Windows x64 для `...`);
+//   * аргументы с позицией >= 4 уходят на стек, по 8 байт на слот.
+//
+// Пролог вариативной функции сбрасывает RCX/RDX/R8/R9 в shadow space
+// вызывающего, поэтому все слоты лежат подряд: [rbp + 16 + 8*i].
+// Читаются они встроенными функциями va_int(i) и va_float(i).
+
+func sumn(n: int, ...) -> int {
+    var i: int = 1;
+    var s: int = 0;
+    while (i <= n) {
+        s = s + va_int(i);
+        i = i + 1;
+    }
+    return s;
+}
+
+func avgf(n: int, ...) -> float {
+    var i: int = 1;
+    var s: float = 0.0;
+    while (i <= n) {
+        s = s + va_float(i);
+        i = i + 1;
+    }
+    return s / to_float(n);
+}
+
+// Доказательство дублирования: биты float-аргумента лежат и в XMM0,
+// и в целочисленном слоте (va_int(0) читает его из shadow space).
+func check_dup(x: float, ...) -> int {
+    var from_xmm: int = 0;
+    var from_slot: int = 0;
+    asm {
+        movq rax, xmm0
+        mov [from_xmm], rax
+    }
+    from_slot = va_int(0);
+    if (from_xmm == from_slot) {
+        return 1;
+    }
+    return 0;
+}
+
+// Тот же тест для второго слота: XMM1 против RDX.
+func check_dup2(x: float, y: float, ...) -> int {
+    var from_xmm: int = 0;
+    asm {
+        movq rax, xmm1
+        mov [from_xmm], rax
+    }
+    if (from_xmm == va_int(1)) {
+        return 1;
+    }
+    return 0;
+}
+
+func main() -> int {
+    print("sumn(6, 10..60) =", sumn(6, 10, 20, 30, 40, 50, 60));
+    print("sumn(2, 7, 8) =", sumn(2, 7, 8));
+    print("avgf(3, 1.5 2.5 6.0) =", avgf(3, 1.5, 2.5, 6.0));
+    print("avgf(5, 1.0..5.0) =", avgf(5, 1.0, 2.0, 3.0, 4.0, 5.0));
+    print("float duplicated in GP slot 0 =", check_dup(1.5, 2.5));
+    print("float duplicated in GP slot 1 =", check_dup2(1.5, 2.5));
+    return 0;
+}

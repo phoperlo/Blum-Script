@@ -163,8 +163,17 @@ impl Parser {
         let name = self.expect_ident()?;
         self.expect(&Tok::LParen)?;
         let mut params = Vec::new();
+        let mut variadic = false;
         if *self.peek() != Tok::RParen {
             loop {
+                // `...` — the function takes extra arguments.
+                if *self.peek() == Tok::Dot {
+                    self.advance();
+                    self.expect(&Tok::Dot)?;
+                    self.expect(&Tok::Dot)?;
+                    variadic = true;
+                    break;
+                }
                 let p = self.expect_ident()?;
                 self.expect(&Tok::Colon)?;
                 let t = self.parse_type()?;
@@ -186,6 +195,7 @@ impl Parser {
             name,
             params,
             ret,
+            variadic,
             body,
         }))
     }

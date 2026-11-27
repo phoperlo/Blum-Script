@@ -87,6 +87,7 @@ pub struct Native {
     continues: Vec<u32>,
     cur_ret: Type,
     cur_ret_ptr: Option<usize>,
+    cur_variadic: bool,
     entry: u32,
 }
 
@@ -111,6 +112,7 @@ pub fn compile(program: &[Stmt]) -> Result<Output, String> {
         continues: Vec::new(),
         cur_ret: Type::Void,
         cur_ret_ptr: None,
+        cur_variadic: false,
         entry: 0,
     };
 
@@ -296,6 +298,8 @@ impl Native {
             "read_str" => Ok(Type::String),
             "read_int" => Ok(Type::Int),
             "read_char" => Ok(Type::Char),
+            "va_int" => Ok(Type::Int),
+            "va_float" => Ok(Type::Float),
             "open" => Ok(Type::Ptr(Box::new(Type::Void))),
             "read" | "write" | "file_size" => Ok(Type::Int),
             "close" => Ok(Type::Void),
@@ -304,7 +308,16 @@ impl Native {
                     .fns
                     .get(name)
                     .ok_or_else(|| format!("undefined function '{}'", name))?;
-                if f.params.len() != args.len() {
+                if f.variadic {
+                    if args.len() < f.params.len() {
+                        return Err(format!(
+                            "function '{}' expects at least {} argument(s), got {}",
+                            name,
+                            f.params.len(),
+                            args.len()
+                        ));
+                    }
+                } else if f.params.len() != args.len() {
                     return Err(format!(
                         "function '{}' expects {} argument(s), got {}",
                         name,
@@ -473,6 +486,7 @@ impl Native {
         self.depth = 0;
         self.cur_ret = f.ret.clone();
         self.cur_ret_ptr = None;
+        self.cur_variadic = f.variadic;
         self.scopes.clear();
         self.breaks.clear();
         self.continues.clear();
@@ -489,49 +503,79 @@ impl Native {
         }
 
         let ptypes: Vec<Type> = f.params.iter().map(|(_, t)| t.clone()).collect();
-        let slots = abi_assign(&ptypes, gpr_start);
-        let regs = [RCX, RDX, R8, R9];
-        let xmms = [XMM0, XMM1, XMM2, XMM3];
-        for ((name, ty), slot) in f.params.iter().zip(slots.iter()) {
-            let sz = self.size_of(ty)?;
-            let agg = self.is_aggregate(ty);
-            let off = self.alloc(sz.max(1));
-            let d = -(off as i32);
-            let is_f = matches!(ty, Type::Float);
-            // Aggregate larger than 8 bytes arrives as a pointer to a copy
-            // made by the caller; the callee copies it into its own frame so
-            // mutations stay local (value semantics).
-            let by_ref = agg && sz > 8;
-            match slot {
-                AbiSlot::Gpr(i) => {
-                    if by_ref {
-                        self.asm.mov_rr(RSI, regs[*i]);
-                        self.copy_to_slot(off, sz)?;
-                    } else {
-                        self.store_reg_slot(d, sz, regs[*i])?;
-                    }
-                }
-                AbiSlot::Xmm(i) => self.asm.movsd_mem_xmm(RBP, d, xmms[*i]),
-                AbiSlot::Stack(k) => {
-                    // [rbp+8] return address, [rbp+16..48) shadow space,
-                    // so the first stack argument lives at [rbp+48].
-                    let src = 48 + 8 * (*k as i32);
-                    if is_f {
-                        self.asm.movsd_xmm_mem(XMM0, RBP, src);
-                        self.asm.movsd_mem_xmm(RBP, d, XMM0);
-                    } else if by_ref {
-                        self.asm.load(RSI, RBP, src);
-                        self.copy_to_slot(off, sz)?;
-                    } else {
-                        self.asm.load(RAX, RBP, src);
-                        self.store_reg_slot(d, sz, RAX)?;
-                    }
-                }
+        if f.variadic {
+            // Home the four integer slots in the caller's shadow space so all
+            // positional arguments are contiguous: [rbp + 16 + 8*i].
+            for (k, r) in [RCX, RDX, R8, R9].iter().enumerate() {
+                self.asm.store(RBP, 16 + (k as i32) * 8, *r);
             }
-            self.scopes
-                .last_mut()
-                .unwrap()
-                .push((name.clone(), ty.clone(), off));
+            for (i, (name, ty)) in f.params.iter().enumerate() {
+                let sz = self.size_of(ty)?;
+                let agg = self.is_aggregate(ty);
+                let off = self.alloc(sz.max(1));
+                let d = -(off as i32);
+                let src = 16 + ((gpr_start + i) as i32) * 8;
+                let by_ref = agg && sz > 8;
+                if matches!(ty, Type::Float) {
+                    self.asm.movsd_xmm_mem(XMM0, RBP, src);
+                    self.asm.movsd_mem_xmm(RBP, d, XMM0);
+                } else if by_ref {
+                    self.asm.load(RSI, RBP, src);
+                    self.copy_to_slot(off, sz)?;
+                } else {
+                    self.asm.load(RAX, RBP, src);
+                    self.store_reg_slot(d, sz, RAX)?;
+                }
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .push((name.clone(), ty.clone(), off));
+            }
+        } else {
+            let slots = abi_assign(&ptypes, gpr_start);
+            let regs = [RCX, RDX, R8, R9];
+            let xmms = [XMM0, XMM1, XMM2, XMM3];
+            for ((name, ty), slot) in f.params.iter().zip(slots.iter()) {
+                let sz = self.size_of(ty)?;
+                let agg = self.is_aggregate(ty);
+                let off = self.alloc(sz.max(1));
+                let d = -(off as i32);
+                let is_f = matches!(ty, Type::Float);
+                // Aggregate larger than 8 bytes arrives as a pointer to a copy
+                // made by the caller; the callee copies it into its own frame so
+                // mutations stay local (value semantics).
+                let by_ref = agg && sz > 8;
+                match slot {
+                    AbiSlot::Gpr(i) => {
+                        if by_ref {
+                            self.asm.mov_rr(RSI, regs[*i]);
+                            self.copy_to_slot(off, sz)?;
+                        } else {
+                            self.store_reg_slot(d, sz, regs[*i])?;
+                        }
+                    }
+                    AbiSlot::Xmm(i) => self.asm.movsd_mem_xmm(RBP, d, xmms[*i]),
+                    AbiSlot::Stack(k) => {
+                        // [rbp+8] return address, [rbp+16..48) shadow space,
+                        // so the first stack argument lives at [rbp+48].
+                        let src = 48 + 8 * (*k as i32);
+                        if is_f {
+                            self.asm.movsd_xmm_mem(XMM0, RBP, src);
+                            self.asm.movsd_mem_xmm(RBP, d, XMM0);
+                        } else if by_ref {
+                            self.asm.load(RSI, RBP, src);
+                            self.copy_to_slot(off, sz)?;
+                        } else {
+                            self.asm.load(RAX, RBP, src);
+                            self.store_reg_slot(d, sz, RAX)?;
+                        }
+                    }
+                }
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .push((name.clone(), ty.clone(), off));
+            }
         }
 
         self.stmts(&f.body)?;
@@ -1580,6 +1624,27 @@ impl Native {
                 self.asm.load8zx_rip(RAX, Fixup::Data(D_INBUF));
                 Ok(Type::Char)
             }
+            "va_int" | "va_float" => {
+                if !self.cur_variadic {
+                    return Err(format!(
+                        "{}() is only available inside a variadic function",
+                        name
+                    ));
+                }
+                self.expect_nargs(name, args, 1)?;
+                let t = self.expr(&args[0])?;
+                self.coerce_to(&t, &Type::Int)?;
+                // Positional argument array: [rbp + 16 + 8*index].
+                self.asm.shl_imm(RAX, 3);
+                self.asm.emit_mem_sib(&[0x8D], true, RCX, RBP, RAX, 1, 16);
+                if name == "va_int" {
+                    self.asm.load(RAX, RCX, 0);
+                    Ok(Type::Int)
+                } else {
+                    self.asm.movsd_xmm_mem(XMM0, RCX, 0);
+                    Ok(Type::Float)
+                }
+            }
             "open" => {
                 self.expect_nargs(name, args, 2)?;
                 self.args_to_regs(args, &[RCX, RDX])?;
@@ -1646,7 +1711,15 @@ impl Native {
             .get(name)
             .cloned()
             .ok_or_else(|| format!("undefined function '{}'", name))?;
-        if f.params.len() != args.len() {
+        if f.variadic && args.len() < f.params.len() {
+            return Err(format!(
+                "function '{}' expects at least {} argument(s), got {}",
+                name,
+                f.params.len(),
+                args.len()
+            ));
+        }
+        if !f.variadic && f.params.len() != args.len() {
             return Err(format!(
                 "function '{}' expects {} argument(s), got {}",
                 name,
@@ -1659,16 +1732,28 @@ impl Native {
         // Argument classes come from the parameter types so the frame layout
         // matches the callee even when an argument is an int literal for a
         // float slot (or vice versa).
-        let tys: Vec<Type> = f.params.iter().map(|(_, pt)| pt.clone()).collect();
+        let tys: Vec<Type> = args
+            .iter()
+            .enumerate()
+            .map(|(i, _)| match f.params.get(i) {
+                Some((_, pt)) => Ok(pt.clone()),
+                None => self.type_of(&args[i]),
+            })
+            .collect::<Result<_, String>>()?;
         let n = args.len();
         let ret_sz = self.size_of(&f.ret)?;
         let ref_ret = self.is_aggregate(&f.ret) && ret_sz > 8;
         let ret_tmp = if ref_ret { Some(self.alloc(ret_sz)) } else { None };
-        let slots = abi_assign(&tys, if ref_ret { 1 } else { 0 });
-        let nstack = slots
-            .iter()
-            .filter(|s| matches!(s, AbiSlot::Stack(_)))
-            .count();
+        let pos0 = if ref_ret { 1 } else { 0 };
+        let slots = abi_assign(&tys, pos0);
+        let nstack = if f.variadic {
+            (0..n).filter(|i| pos0 + *i >= 4).count()
+        } else {
+            slots
+                .iter()
+                .filter(|s| matches!(s, AbiSlot::Stack(_)))
+                .count()
+        };
 
         // Aggregates larger than 8 bytes are passed by reference: the caller
         // copies the value into the staging area and passes its address.
@@ -1727,23 +1812,42 @@ impl Native {
         self.depth += outgoing as usize;
 
         let base = outgoing as i32; // staging offset relative to current rsp
-        // stack arguments, in order
-        for (i, slot) in slots.iter().enumerate() {
-            if let AbiSlot::Stack(k) = slot {
-                self.asm.load(RAX, RSP, base + (i * 8) as i32);
-                self.asm.store(RSP, 32 + (*k as i32) * 8, RAX);
-            }
-        }
-        // register arguments
         let regs = [RCX, RDX, R8, R9];
         let xmms = [XMM0, XMM1, XMM2, XMM3];
-        for (i, slot) in slots.iter().enumerate() {
-            match slot {
-                AbiSlot::Gpr(k) => self.asm.load(regs[*k], RSP, base + (i * 8) as i32),
-                AbiSlot::Xmm(k) => {
-                    self.asm.movsd_xmm_mem(xmms[*k], RSP, base + (i * 8) as i32)
+        if f.variadic {
+            // C varargs: slots are positional (argument index), a float value
+            // is duplicated into the integer register of the same slot, and
+            // everything past slot 4 goes to the stack in order.
+            for (i, t) in tys.iter().enumerate() {
+                let pos = pos0 + i;
+                let src = base + (i * 8) as i32;
+                if pos < 4 {
+                    self.asm.load(regs[pos], RSP, src);
+                } else {
+                    self.asm.load(RAX, RSP, src);
+                    self.asm.store(RSP, 32 + (pos as i32 - 4) * 8, RAX);
                 }
-                AbiSlot::Stack(_) => {}
+                if matches!(t, Type::Float) && i < 4 {
+                    self.asm.movsd_xmm_mem(xmms[i], RSP, src);
+                }
+            }
+        } else {
+            // stack arguments, in order
+            for (i, slot) in slots.iter().enumerate() {
+                if let AbiSlot::Stack(k) = slot {
+                    self.asm.load(RAX, RSP, base + (i * 8) as i32);
+                    self.asm.store(RSP, 32 + (*k as i32) * 8, RAX);
+                }
+            }
+            // register arguments
+            for (i, slot) in slots.iter().enumerate() {
+                match slot {
+                    AbiSlot::Gpr(k) => self.asm.load(regs[*k], RSP, base + (i * 8) as i32),
+                    AbiSlot::Xmm(k) => {
+                        self.asm.movsd_xmm_mem(xmms[*k], RSP, base + (i * 8) as i32)
+                    }
+                    AbiSlot::Stack(_) => {}
+                }
             }
         }
         if let Some(off) = ret_tmp {

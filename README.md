@@ -60,6 +60,7 @@ blumsc hex    <file.blm>
 - вещественные числа `float` (IEEE-754 double) на SSE2: арифметика, сравнения, `XMM0..3` в ABI, печать 6 знаков, `nan`/`inf`
 - `import "file.blm"` с рекурсивным раскрытием
 - `asm { ... }` — текстовый inline-ассемблер (мнемоники, метки, доступ к локальным и глобальным переменным) плюс совместимый режим raw hex-байтов
+- вариативные функции `func f(a: int, ...)` с C-совместимым varargs ABI: дублирование float в GP-слоты, home space, `va_int`/`va_float`
 - собственный рантайм на машинном коде: печать чисел/строк/символов/bool, `strlen`, heap
 - соглашение вызова Microsoft x64, импорт только из `kernel32.dll`
 
@@ -75,6 +76,7 @@ blumsc hex    <file.blm>
 - `floats.blm` — вещественные числа: арифметика, структуры, массивы, преобразования, `nan`/`inf`;
 - `structs_by_value.blm` — структуры и массивы по значению: аргументы, возврат, копирование, рекурсия;
 - `asm.blm` — inline-ассемблер: регистры, локальные метки, `[local]`/`[global]`, вызов функций, SSE;
+- `varargs.blm` — вариативные функции, дублирование float в GP-слоты, `va_int`/`va_float`;
 - `features.blm` — вложенные структуры, массивы, `malloc`, `sizeof`;
 - `utils.blm` — модуль с функциями.
 
@@ -85,6 +87,7 @@ blumsc run .\examples\imports.blm
 blumsc run .\examples\floats.blm
 blumsc run .\examples\structs_by_value.blm
 blumsc run .\examples\asm.blm
+blumsc run .\examples\varargs.blm
 ```
 
 ## Документация
