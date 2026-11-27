@@ -56,6 +56,9 @@ pub enum Fixup {
     Rdata(u32),
     /// Rel32 to `.data + off`.
     Data(u32),
+    /// Rel32 to `.data + off` when `n` immediate bytes follow the
+    /// displacement (the instruction does not end at `disp32`).
+    DataAfter(u32, u8),
 }
 
 pub struct Asm {
@@ -534,8 +537,280 @@ impl Asm {
 
     // ---- control flow ----
 
-    pub fn jmp(&mut self, l: u32) {
-        self.code.push(0xE9);
+    // ---- generic forms for the inline assembler ----
+
+    /// `op reg, rm` with an explicit REX.W, bypassing the private `rr`.
+    pub fn emit_rr(&mut self, op: &[u8], w: bool, reg: u8, rm: u8) {
+        self.rr(op, w, reg, rm);
+    }
+
+    /// `op reg, [base + disp32]`
+    pub fn emit_mem(&mut self, op: &[u8], w: bool, reg: u8, base: u8, disp: i32) {
+        self.mem(op, w, reg, base, disp);
+    }
+
+    /// `op reg, [base + index*scale + disp32]`
+    pub fn emit_mem_sib(
+        &mut self,
+        op: &[u8],
+        w: bool,
+        reg: u8,
+        base: u8,
+        index: u8,
+        scale: u8,
+        disp: i32,
+    ) {
+        let mut v = 0x40;
+        if w {
+            v |= 8;
+        }
+        if reg >= 8 {
+            v |= 4;
+        }
+        if index >= 8 {
+            v |= 2;
+        }
+        if base >= 8 {
+            v |= 1;
+        }
+        if v != 0x40 {
+            self.code.push(v);
+        }
+        self.code.extend_from_slice(op);
+        self.code.push(0x80 | ((reg & 7) << 3) | 0x04);
+        let sc = match scale {
+            1 => 0u8,
+            2 => 1,
+            4 => 2,
+            _ => 3,
+        };
+        self.code
+            .push((sc << 6) | ((index & 7) << 3) | (base & 7));
+        self.code.extend_from_slice(&disp.to_le_bytes());
+    }
+
+    /// Group-1 ALU with an immediate: add/or/adc/sbb/and/sub/xor/cmp
+    /// (`digit` 0..7). 64-bit when `w`, 32-bit otherwise.
+    pub fn alu_imm(&mut self, w: bool, digit: u8, r: u8, imm: i64) {
+        if imm >= i8::MIN as i64 && imm <= i8::MAX as i64 {
+            self.rex(w, 0, r);
+            self.code.push(0x83);
+            self.code.push(0xC0 | (digit << 3) | (r & 7));
+            self.code.push(imm as u8);
+        } else {
+            self.rex(w, 0, r);
+            self.code.push(0x81);
+            self.code.push(0xC0 | (digit << 3) | (r & 7));
+            self.code.extend_from_slice(&(imm as i32).to_le_bytes());
+        }
+    }
+
+    /// 8-bit group-1 ALU with an immediate (opcode 0x80).
+    pub fn alu_imm8(&mut self, digit: u8, r: u8, imm: i64) {
+        self.rex(false, 0, r);
+        self.code.push(0x80);
+        self.code.push(0xC0 | (digit << 3) | (r & 7));
+        self.code.push(imm as u8);
+    }
+
+    /// `mov r32, imm32`
+    pub fn mov_imm32_reg(&mut self, r: u8, v: i64) {
+        self.rex(false, 0, r);
+        self.code.push(0xB8 + (r & 7));
+        self.code.extend_from_slice(&(v as i32).to_le_bytes());
+    }
+
+    /// `push imm32`
+    pub fn push_imm32(&mut self, v: i32) {
+        self.code.push(0x68);
+        self.code.extend_from_slice(&v.to_le_bytes());
+    }
+
+    /// `test r, imm`
+    pub fn test_imm(&mut self, w: bool, r: u8, imm: i64) {
+        self.rex(w, 0, r);
+        self.code.push(0xF7);
+        self.code.push(0xC0 | (r & 7));
+        self.code.extend_from_slice(&(imm as i32).to_le_bytes());
+    }
+
+    /// `imul dst, src, imm` (`dst` and `src` are the same register here).
+    pub fn imul_imm(&mut self, w: bool, dst: u8, imm: i64) {
+        if imm >= i8::MIN as i64 && imm <= i8::MAX as i64 {
+            self.rex(w, dst, dst);
+            self.code.push(0x6B);
+            self.code.push(0xC0 | ((dst & 7) << 3) | (dst & 7));
+            self.code.push(imm as u8);
+        } else {
+            self.rex(w, dst, dst);
+            self.code.push(0x69);
+            self.code.push(0xC0 | ((dst & 7) << 3) | (dst & 7));
+            self.code.extend_from_slice(&(imm as i32).to_le_bytes());
+        }
+    }
+
+    /// `shl/shr/sar r, imm8` (`digit` 4/5/7).
+    pub fn shift_imm(&mut self, w: bool, digit: u8, r: u8, imm: u8) {
+        self.rex(w, 0, r);
+        self.code.push(0xC1);
+        self.code.push(0xC0 | (digit << 3) | (r & 7));
+        self.code.push(imm);
+    }
+
+    /// `shl/shr/sar r, cl`
+    pub fn shift_cl(&mut self, w: bool, digit: u8, r: u8) {
+        self.rex(w, 0, r);
+        self.code.push(0xD3);
+        self.code.push(0xC0 | (digit << 3) | (r & 7));
+    }
+
+    /// `setcc r8` (`cc` is the 0..15 condition code).
+    pub fn setcc_r(&mut self, cc: u8, r: u8) {
+        self.rex(false, 0, r);
+        self.code.extend_from_slice(&[0x0F, 0x90 + cc]);
+        self.code.push(0xC0 | (r & 7));
+    }
+
+    /// `call r`
+    pub fn call_r(&mut self, r: u8) {
+        self.rex(false, 0, r);
+        self.code.push(0xFF);
+        self.code.push(0xD0 | (r & 7));
+    }
+
+    pub fn syscall(&mut self) {
+        self.code.extend_from_slice(&[0x0F, 0x05]);
+    }
+
+    pub fn nop(&mut self) {
+        self.code.push(0x90);
+    }
+
+    pub fn int3(&mut self) {
+        self.code.push(0xCC);
+    }
+
+    pub fn ud2(&mut self) {
+        self.code.extend_from_slice(&[0x0F, 0x0B]);
+    }
+
+    pub fn cpuid(&mut self) {
+        self.code.extend_from_slice(&[0x0F, 0xA2]);
+    }
+
+    pub fn rdtsc(&mut self) {
+        self.code.extend_from_slice(&[0x0F, 0x31]);
+    }
+
+    /// `op reg, [rip + disp32]` with a `.data` relocation.
+    pub fn emit_rip(&mut self, op: &[u8], w: bool, reg: u8, off: u32) {
+        self.rip(op, w, reg, Fixup::Data(off));
+    }
+
+    /// 8-bit-operand form of `mem`: forces a REX prefix for spl/bpl/sil/dil.
+    pub fn emit_mem8(&mut self, op: &[u8], reg: u8, base: u8, disp: i32) {
+        if reg >= 4 && reg < 8 && base < 8 {
+            self.code.push(0x40);
+        } else {
+            self.rex(false, reg, base);
+        }
+        self.code.extend_from_slice(op);
+        let b = base & 7;
+        self.code.push(0x80 | ((reg & 7) << 3) | b);
+        if b == 4 {
+            self.code.push(0x24);
+        }
+        self.code.extend_from_slice(&disp.to_le_bytes());
+    }
+
+    /// 8-bit-operand SIB form of `mem`.
+    pub fn emit_mem8_sib(&mut self, op: &[u8], reg: u8, base: u8, index: u8, scale: u8, disp: i32) {
+        let mut v = 0x40u8;
+        if reg >= 8 {
+            v |= 4;
+        }
+        if index >= 8 {
+            v |= 2;
+        }
+        if base >= 8 {
+            v |= 1;
+        }
+        let force = reg >= 4 && reg < 8;
+        if v != 0x40 || force {
+            self.code.push(v);
+        }
+        self.code.extend_from_slice(op);
+        self.code.push(0x80 | ((reg & 7) << 3) | 0x04);
+        let sc = match scale {
+            1 => 0u8,
+            2 => 1,
+            4 => 2,
+            _ => 3,
+        };
+        self.code.push((sc << 6) | ((index & 7) << 3) | (base & 7));
+        self.code.extend_from_slice(&disp.to_le_bytes());
+    }
+
+    /// `mov r8, imm8`
+    pub fn mov_imm8_reg(&mut self, r: u8, v: u8) {
+        let mut rex = 0x40u8;
+        if r >= 8 {
+            rex |= 1;
+        }
+        if rex != 0x40 || r >= 4 {
+            self.code.push(rex);
+        }
+        self.code.push(0xB0 + (r & 7));
+        self.code.push(v);
+    }
+
+    /// `op [base + disp32], imm32` for group-1 ALU operations (`digit` 0..7).
+    pub fn alu_mem_imm(&mut self, w: bool, digit: u8, base: u8, disp: i32, imm: i32) {
+        self.mem(&[0x81], w, digit, base, disp);
+        self.code.extend_from_slice(&imm.to_le_bytes());
+    }
+
+    /// Generic SSE memory form: `06 [REX] 0F xx /r` with the prefix emitted first.
+    pub fn emit_sse_m(
+        &mut self,
+        p: Option<u8>,
+        w: bool,
+        reg: u8,
+        base: u8,
+        disp: i32,
+        op: &[u8],
+    ) {
+        self.sse_m(p, w, reg, base, disp, op);
+    }
+
+    /// Generic SSE rip-relative form with a `.data` relocation.
+    pub fn emit_sse_rip(&mut self, p: Option<u8>, w: bool, reg: u8, off: u32, op: &[u8]) {
+        self.sse_rip(p, w, reg, Fixup::Data(off), op);
+    }
+
+    /// Rip-relative `op /digit [rip+disp32]` where `trailing` immediate bytes
+    /// follow the displacement (so the relocation must skip them).
+    pub fn emit_rip_after(
+        &mut self,
+        p: Option<u8>,
+        w: bool,
+        reg: u8,
+        off: u32,
+        op: &[u8],
+        trailing: u8,
+    ) {
+        if let Some(p) = p {
+            self.code.push(p);
+        }
+        self.rex(w, reg, 0);
+        self.code.extend_from_slice(op);
+        self.code.push(((reg & 7) << 3) | 0x05);
+        let at = self.code.len() as u32;
+        self.code.extend_from_slice(&[0, 0, 0, 0]);
+        self.fixups.push((at, Fixup::DataAfter(off, trailing)));
+    }
+
+    pub fn jmp(&mut self, l: u32) {        self.code.push(0xE9);
         let at = self.code.len() as u32;
         self.code.extend_from_slice(&[0, 0, 0, 0]);
         self.fixups.push((at, Fixup::Local(l)));

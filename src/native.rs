@@ -781,20 +781,24 @@ impl Native {
     }
 
     fn emit_raw(&mut self, raw: &str) -> Result<(), String> {
-        for tok in raw.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
-            let t = tok.trim();
-            if t.is_empty() {
-                continue;
+        // `asm { ... }` accepts both raw hex bytes (the original syntax) and a
+        // small textual assembler.  Locals and globals are visible by name.
+        let mut locals: HashMap<String, i32> = HashMap::new();
+        for scope in self.scopes.iter() {
+            for (n, _, off) in scope.iter() {
+                locals.insert(n.clone(), -(*off as i32));
             }
-            let t = t
-                .strip_prefix("0x")
-                .or_else(|| t.strip_prefix("0X"))
-                .unwrap_or(t);
-            let b = u8::from_str_radix(t, 16)
-                .map_err(|_| format!("asm: '{}' is not a hex byte", tok))?;
-            self.asm.raw(&[b]);
         }
-        Ok(())
+        let mut globals: HashMap<String, u32> = HashMap::new();
+        for (n, (_, off)) in self.globals.iter() {
+            globals.insert(n.clone(), *off);
+        }
+        let ctx = crate::inline_asm::Ctx {
+            locals: &locals,
+            globals: &globals,
+            fns: &self.fn_labels,
+        };
+        crate::inline_asm::assemble(raw, &mut self.asm, &ctx)
     }
 
     // ---------------- expressions ----------------

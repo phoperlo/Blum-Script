@@ -6,6 +6,7 @@
 mod abi;
 mod ast;
 mod imports;
+mod inline_asm;
 mod lexer;
 mod native;
 mod parser;

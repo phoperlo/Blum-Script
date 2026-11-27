@@ -142,6 +142,9 @@ pub fn link(
             Fixup::Iat(i) => (idata_rva + iat_off + 8 * *i) as i64 - here,
             Fixup::Rdata(o) => (rdata_rva + *o) as i64 - here,
             Fixup::Data(o) => (data_rva + *o) as i64 - here,
+            Fixup::DataAfter(o, n) => {
+                (data_rva + *o) as i64 - (text_rva as i64 + *at as i64 + 4 + *n as i64)
+            }
         };
         if disp < i32::MIN as i64 || disp > i32::MAX as i64 {
             return Err("internal: relocation out of range, image too large".into());

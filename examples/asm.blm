@@ -1,0 +1,86 @@
+// asm.blm — текстовый inline-ассемблер внутри asm { ... }.
+//
+// Поддерживаются: mov / movzx / lea / add / sub / and / or / xor / cmp / test /
+// imul / idiv / div / neg / not / inc / dec / shl / shr / sar / jmp / jcc /
+// setcc / call / ret / push / pop / syscall / nop / int3 / cpuid / rdtsc /
+// movsd и прочие SSE-операции.
+//
+// Операнды: rax/eax/al (и весь GPR-файл, r8..r15), xmm0..xmm15, числа
+// (42, 0x2a, -1), память ([rax+8], [rax+rbx*4+16], [local], [global]) и метки.
+// Строка из одних hex-байтов вставляется в .text дословно (старый синтаксис).
+
+var counter: int = 100;
+
+func twice(x: int) -> int {
+    return x * 2;
+}
+
+func main() -> int {
+    var n: int = 5;
+    var sum: int = 0;
+    var i: int = 0;
+
+    // Немедленное значение -> локальная переменная.
+    asm {
+        mov rax, 42
+        mov [n], rax
+    }
+    print("n =", n);
+
+    // Чтение локальной переменной и арифметика над ней.
+    asm {
+        mov rax, [n]
+        add rax, 8
+        sub rax, 2
+        mov [n], rax
+    }
+    print("n =", n);
+
+    // Глобальная переменная: rip-relative доступ к .data.
+    asm {
+        mov rax, [counter]
+        add rax, 1
+        mov [counter], rax
+    }
+    print("counter =", counter);
+
+    // Вызов blumscript-функции из asm (Windows x64: первый аргумент в RCX).
+    asm {
+        mov rcx, [n]
+        call twice
+        mov [n], rax
+    }
+    print("n =", n);
+
+    // Цикл с локальными метками.
+    asm {
+        xor rax, rax
+        mov rcx, [n]
+    sum_loop:
+        add rax, rcx
+        dec rcx
+        jnz sum_loop
+        mov [sum], rax
+    }
+    print("sum =", sum);
+
+    // 32- и 8-битные формы регистров.
+    asm {
+        mov eax, 7
+        mov [n], rax
+        mov al, 65
+        mov [i], rax
+    }
+    print("n =", n, "i =", i);
+
+    // Размерные префиксы у памяти и hex-байты (совместимость).
+    asm {
+        mov qword [counter], 7
+        mov byte [i], 9
+        nop
+        90 90
+    }
+    print("counter =", counter, "i =", i);
+
+    return 0;
+}

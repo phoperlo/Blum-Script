@@ -421,12 +421,22 @@ var p: *Point = cast&lt;*Point&gt;(malloc(bytes));</code></pre></div>
   <h3>Модули</h3>
   <div class="code-wrap"><pre><code>import "utils.blm";</code></pre></div>
   <p>Импорт раскрывается рекурсивно относительно текущего файла; расширение <code>.blm</code> добавляется автоматически. Повторные включения игнорируются.</p>
-  <h3>Сырой машинный код</h3>
+  <h3>Inline-ассемблер</h3>
+  <div class="code-wrap"><pre><code>asm {
+    mov rax, 42
+    mov [n], rax        // локальная переменная
+    add qword [counter], 1
+    mov rcx, [n]
+    call twice          // вызов функции BlumScript
+loop_start:
+    dec rax
+    jnz loop_start
+}</code></pre></div>
+  <p>Внутри <code>asm { ... }</code> работает текстовый ассемблер: мнемоники (<code>mov</code>, <code>add</code>, <code>cmp</code>, <code>jmp/jcc</code>, <code>call</code>, SSE-операции), локальные метки и доступ к переменным по имени — <code>[local]</code> превращается в <code>[rbp-off]</code>, <code>[global]</code> — в rip-relative обращение к <code>.data</code>. Строка из одних hex-байтов по-прежнему копируется в <code>.text</code> дословно.</p>
   <div class="code-wrap"><pre><code>asm {
     48 c7 c0 2a 00 00 00   // mov rax, 42
     90 90                  // nop nop
 }</code></pre></div>
-  <p>Содержимое <code>asm { ... }</code> — hex-байты, которые копируются в секцию <code>.text</code> дословно. Это прямой доступ к процессору: любые инструкции, вызовы WinAPI по адресам, <code>cpuid</code>, <code>rdtsc</code> и т.п.</p>
 </section>
 
 <section id="playground">
