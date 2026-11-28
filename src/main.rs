@@ -1,4 +1,4 @@
-//! BlumScript compiler CLI (`blumsc`).
+﻿//! BlumScript compiler CLI (`blumsc`).
 //!
 //! The compiler emits x86-64 machine code directly and links a PE32+
 //! executable itself: no C backend, no assembler, no LLVM, no linker.
@@ -7,8 +7,13 @@ mod abi;
 mod ast;
 mod imports;
 mod inline_asm;
+mod ir;
+mod ircg;
+mod irgen;
 mod lexer;
 mod native;
+mod opt;
+mod regalloc;
 mod parser;
 mod pe;
 mod runtime;
@@ -34,10 +39,15 @@ USAGE:
 OPTIONS:
   -o <path>        output executable path (build)
   --emit-bytes     print the emitted machine code as hex
+  --no-ir          compile function bodies through the legacy backend
+  --emit-ir        print the optimised IR and register allocation
   -h, --help       show this help
   -V, --version    show version
 
 The backend writes x86-64 machine code and a PE32+ image directly.
+Function bodies are lowered through a three-address IR that is optimised
+and register-allocated before emission; --no-ir selects the older direct
+AST-to-x64 path for comparison.
 No external compiler, linker or runtime is required."#,
         env!("CARGO_PKG_VERSION")
     );
@@ -50,9 +60,9 @@ fn parse_source(path: &Path) -> Result<Vec<ast::Stmt>, String> {
     p.parse_program()
 }
 
-fn compile(input: &Path) -> Result<native::Output, String> {
+fn compile(input: &Path, opts: native::Options) -> Result<native::Output, String> {
     let program = parse_source(input)?;
-    native::compile(&program)
+    native::compile_with(&program, opts)
 }
 
 fn default_exe(path: &Path) -> PathBuf {
@@ -113,6 +123,8 @@ fn main() {
 
     let mut output: Option<PathBuf> = None;
     let mut emit_bytes = cmd == "hex";
+    let mut opts = native::Options::default();
+    let mut ir_flag: Option<bool> = None;
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -128,11 +140,23 @@ fn main() {
                 emit_bytes = true;
                 i += 1;
             }
+            "--no-ir" => {
+                ir_flag = Some(false);
+                i += 1;
+            }
+            "--emit-ir" => {
+                ir_flag = Some(true);
+                opts.dump_ir = true;
+                i += 1;
+            }
             other => {
                 eprintln!("error: unknown option '{}'", other);
                 process::exit(1);
             }
         }
+    }
+    if let Some(v) = ir_flag {
+        opts.use_ir = v;
     }
 
     match cmd {
@@ -154,7 +178,7 @@ fn main() {
                 process::exit(1);
             }
         },
-        "check" => match compile(&input) {
+        "check" => match compile(&input, opts) {
             Ok(_) => println!("ok: {}", input.display()),
             Err(e) => {
                 eprintln!("error: {}", e);
@@ -162,7 +186,7 @@ fn main() {
             }
         },
         "build" | "run" | "hex" => {
-            let out = match compile(&input) {
+            let out = match compile(&input, opts) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("error: {}", e);

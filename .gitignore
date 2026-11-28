@@ -26,3 +26,8 @@ Thumbs.db
 # Local notes
 *.local.md
 io_test.txt
+
+# Compiler scratch output
+build_err.txt
+check_err.txt
+ir*.txt

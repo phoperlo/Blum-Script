@@ -1,4 +1,4 @@
-//! Native x86-64 code generator: BlumScript AST -> machine code.
+﻿//! Native x86-64 code generator: BlumScript AST -> machine code.
 //!
 //! Calling convention: Microsoft x64 (RCX, RDX, R8, R9 + shadow space).
 //! Every expression leaves its value in RAX.  Locals live at negative offsets
@@ -89,9 +89,34 @@ pub struct Native {
     cur_ret_ptr: Option<usize>,
     cur_variadic: bool,
     entry: u32,
+    /// Compile function bodies through the IR backend when possible.
+    use_ir: bool,
+    /// Print the IR of every optimised function to stderr.
+    dump_ir: bool,
 }
 
+/// Compiler options that do not affect the language surface.
+#[derive(Clone, Copy)]
+pub struct Options {
+    pub use_ir: bool,
+    pub dump_ir: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            use_ir: true,
+            dump_ir: false,
+        }
+    }
+}
+
+#[allow(dead_code)]
 pub fn compile(program: &[Stmt]) -> Result<Output, String> {
+    compile_with(program, Options::default())
+}
+
+pub fn compile_with(program: &[Stmt], opts: Options) -> Result<Output, String> {
     let mut n = Native {
         asm: Asm::new(),
         rdata: Vec::new(),
@@ -114,6 +139,8 @@ pub fn compile(program: &[Stmt]) -> Result<Output, String> {
         cur_ret_ptr: None,
         cur_variadic: false,
         entry: 0,
+        use_ir: opts.use_ir,
+        dump_ir: opts.dump_ir,
     };
 
     n.collect_structs(program)?;
@@ -476,6 +503,21 @@ impl Native {
 
     fn emit_fn(&mut self, f: &FuncDecl) -> Result<(), String> {
         let lbl = *self.fn_labels.get(&f.name).unwrap();
+        if self.use_ir && !crate::irgen::has_inline_asm(&f.body) {
+            if let Some((irf, alloc)) = self.try_ir(f)? {
+                crate::ircg::emit_fn(
+                    &mut self.asm,
+                    &irf,
+                    &alloc,
+                    lbl,
+                    &self.fn_labels,
+                    &self.rt,
+                    &mut self.rdata,
+                    &mut self.fconsts,
+                )?;
+                return Ok(());
+            }
+        }
         self.asm.bind(lbl);
         self.asm.push_r(RBP);
         self.asm.mov_rr(RBP, RSP);
@@ -586,6 +628,62 @@ impl Native {
         let fsz = ((self.max_frame + 15) / 16 * 16) as u32;
         self.asm.patch_u32(patch, fsz);
         Ok(())
+    }
+
+    // ---------------- IR backend ----------------
+
+    /// Lower, optimise and allocate `f` through the IR pipeline.  `Ok(None)`
+    /// means "fall back to the legacy backend" — used for internal failures
+    /// (allocation did not converge); nothing has been emitted at that point,
+    /// so the fallback is always safe.  Language errors from lowering are
+    /// returned as `Err` so the user sees them exactly once.
+    fn try_ir(
+        &mut self,
+        f: &FuncDecl,
+    ) -> Result<Option<(crate::ir::Function, crate::regalloc::Alloc)>, String> {
+        let lowered = {
+            let ctx = crate::irgen::Ctx {
+                structs: &self.structs,
+                fns: &self.fns,
+                globals: &self.globals,
+            };
+            let mut it = crate::irgen::Interner {
+                strings: &mut self.strings,
+                fconsts: &mut self.fconsts,
+                rdata: &mut self.rdata,
+            };
+            crate::irgen::lower(f, &ctx, &mut it)?
+        };
+        let mut irf = lowered;
+        crate::opt::optimize(&mut irf);
+        if self.dump_ir {
+            eprintln!("{}", irf.dump());
+        }
+        match crate::regalloc::allocate(&mut irf) {
+            Ok(a) => {
+                if self.dump_ir {
+                    eprintln!(
+                        "; {} : {} round(s), frame {} bytes",
+                        f.name, a.rounds, irf.frame
+                    );
+                    for (i, l) in a.locs.iter().enumerate().skip(3) {
+                        eprintln!(";   v{} : {:?}", i, l);
+                    }
+                    if !a.spilled.is_empty() {
+                        eprintln!(";   spilled: {:?}", a.spilled);
+                    }
+                    eprintln!("{}", irf.dump());
+                }
+                Ok(Some((irf, a)))
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: register allocation failed for '{}': {} (using the legacy backend)",
+                    f.name, e
+                );
+                Ok(None)
+            }
+        }
     }
 
     fn emit_entry(&mut self, program: &[Stmt]) -> Result<(), String> {

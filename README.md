@@ -35,15 +35,17 @@ Hello, BlumScript!
 ## CLI
 
 ```
-blumsc build <file.blm> [-o out.exe] [--emit-bytes]
-blumsc run   <file.blm>
-blumsc check <file.blm>
+blumsc build <file.blm> [-o out.exe] [--emit-bytes] [--no-ir] [--emit-ir]
+blumsc run   <file.blm> [--emit-bytes] [--no-ir] [--emit-ir]
+blumsc check <file.blm> [--no-ir] [--emit-ir]
 blumsc tokens <file.blm>
 blumsc ast    <file.blm>
 blumsc hex    <file.blm>
 ```
 
 `--emit-bytes` / `hex` печатают сгенерированный машинный код hex-дампом.
+`--emit-ir` показывает оптимизированное IR, карту регистров и спиллы,
+`--no-ir` собирает тела функций старым прямым путём AST → x64 (A/B-сравнение).
 
 ## Возможности
 
@@ -61,6 +63,7 @@ blumsc hex    <file.blm>
 - `import "file.blm"` с рекурсивным раскрытием
 - `asm { ... }` — текстовый inline-ассемблер (мнемоники, метки, доступ к локальным и глобальным переменным) плюс совместимый режим raw hex-байтов
 - вариативные функции `func f(a: int, ...)` с C-совместимым varargs ABI: дублирование float в GP-слоты, home space, `va_int`/`va_float`
+- трёхадресное IR с оптимизациями (свёртка констант, тождества, DCE, strength reduction) и линейной регистровой аллокацией — локалы и промежуточные значения живут в регистрах, спиллы только при нехватке
 - собственный рантайм на машинном коде: печать чисел/строк/символов/bool, `strlen`, heap
 - соглашение вызова Microsoft x64, импорт только из `kernel32.dll`
 
@@ -131,7 +134,12 @@ blumscript_rust/
 │   ├── parser.rs    # рекурсивный спуск
 │   ├── types.rs     # система типов
 │   ├── x64.rs       # кодировщик инструкций x86-64, метки, фиксапы
-│   ├── native.rs    # семантика + кодоген (AST → машинный код)
+│   ├── ir.rs        # трёхадресное IR: инструкции, терминаторы, блоки, Builder
+│   ├── irgen.rs     # AST → IR: типы, места, агрегаты, вызовы, builtins
+│   ├── opt.rs       # оптимизации IR
+│   ├── regalloc.rs  # линейный скан, клоббер-маски, спиллы
+│   ├── ircg.rs      # IR → x86-64: пролог/эпилог, вызовы, терманаторы
+│   ├── native.rs    # драйвер проходов + legacy-кодоген (AST → машинный код)
 │   ├── runtime.rs   # рантайм на машинном коде
 │   ├── abi.rs       # смещения, индексы IAT, импорты kernel32
 │   ├── pe.rs        # PE32+ writer (секции, импорт-таблица, фиксапы)

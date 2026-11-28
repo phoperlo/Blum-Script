@@ -518,11 +518,14 @@ free(p);</code></pre></div>
     <tr><td><code>cast&lt;T&gt;(x)</code></td><td>приведение типа</td></tr>
   </table>
   <h3>CLI</h3>
-  <div class="code-wrap"><pre><code>blumsc build file.blm [-o out.exe] [--emit-bytes]
+  <div class="code-wrap"><pre><code>blumsc build file.blm [-o out.exe] [--emit-bytes] [--no-ir] [--emit-ir]
 blumsc run   file.blm
 blumsc check file.blm
 blumsc tokens file.blm
 blumsc ast    file.blm</code></pre></div>
+  <p>Тела функций компилируются через трёхадресное IR: оптимизации, затем
+  линейная регистровая аллокация. <code>--emit-ir</code> показывает IR и карту
+  регистров, <code>--no-ir</code> собирает старым прямым путём AST → x64.</p>
 </section>
 
 </main>
